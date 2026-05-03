@@ -1,0 +1,40 @@
+import {
+  BarChart3,
+  BriefcaseBusiness,
+  Building2,
+  Clapperboard,
+  Gem,
+  GraduationCap,
+  Gauge,
+  HeartPulse,
+  LayoutTemplate,
+  LineChart,
+  MapPin,
+  Megaphone,
+  MessagesSquare,
+  Search,
+  ShoppingBag,
+  Sparkles,
+  Utensils,
+  type LucideIcon
+} from "lucide-react";
+
+export const iconMap: Record<string, LucideIcon> = {
+  BarChart3,
+  BriefcaseBusiness,
+  Building2,
+  Clapperboard,
+  Gem,
+  GraduationCap,
+  Gauge,
+  HeartPulse,
+  LayoutTemplate,
+  LineChart,
+  MapPin,
+  Megaphone,
+  MessagesSquare,
+  Search,
+  ShoppingBag,
+  Sparkles,
+  Utensils
+};

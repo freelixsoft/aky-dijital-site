@@ -1,0 +1,15 @@
+<svg width="760" height="184" viewBox="0 0 760 184" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="760" height="184" rx="28" fill="#07080a"/>
+  <g transform="translate(44 36) scale(2)">
+    <rect x="2" y="2" width="52" height="52" rx="12" fill="#0d1016" stroke="#36b7ff" stroke-opacity="0.44" stroke-width="2"/>
+    <path d="M13.5 39.5L25.2 15.5C26.35 13.15 29.65 13.15 30.8 15.5L42.5 39.5" stroke="#f7fafc" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M19.8 31.4H36.2" stroke="#b7ff3c" stroke-width="4.2" stroke-linecap="round"/>
+    <path d="M31 24.6L42 13.6M42 13.6H33.7M42 13.6V21.9" stroke="#36b7ff" stroke-width="3.3" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M13 45.3H43" stroke="#ff7a3d" stroke-opacity="0.8" stroke-width="2.2" stroke-linecap="round"/>
+    <circle cx="43.5" cy="39.5" r="2.5" fill="#b7ff3c"/>
+  </g>
+  <text x="184" y="84" fill="#f7fafc" font-family="Inter, Manrope, Arial, sans-serif" font-size="42" font-weight="900" letter-spacing="4">AKY DİJİTAL</text>
+  <text x="187" y="125" fill="#9aa8b8" font-family="Inter, Manrope, Arial, sans-serif" font-size="22" font-weight="600">360° dijital büyüme ajansı</text>
+  <path d="M188 145H488" stroke="#36b7ff" stroke-opacity="0.36" stroke-width="2"/>
+  <path d="M188 155H392" stroke="#b7ff3c" stroke-opacity="0.62" stroke-width="3" stroke-linecap="round"/>
+</svg>
