@@ -10,7 +10,7 @@ export function HeroVisual() {
     <div className="pointer-events-none absolute inset-x-0 top-20 -z-10 mx-auto h-[560px] max-w-7xl overflow-hidden px-4 sm:px-6 lg:px-8">
       <div className="absolute inset-0 bg-grid-lines bg-[length:44px_44px] opacity-[0.18]" />
       <motion.div
-        className="absolute right-0 top-8 hidden w-[48rem] rounded-lg border border-white/10 bg-carbon-900/80 p-5 shadow-glow backdrop-blur md:block"
+        className="absolute -right-44 top-8 hidden w-[46rem] rounded-lg border border-white/10 bg-carbon-900/80 p-5 shadow-glow backdrop-blur xl:block 2xl:w-[48rem]"
         initial={{ opacity: 0, x: 40 }}
         animate={{ opacity: 1, x: 0 }}
         transition={{ duration: 0.75, ease: [0.22, 1, 0.36, 1] }}

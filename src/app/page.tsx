@@ -23,10 +23,10 @@ export default function HomePage() {
       <section className="relative isolate overflow-hidden border-b border-white/10">
         <HeroVisual />
         <div className="section-shell grid min-h-[calc(88svh-4.5rem)] items-center gap-10 py-14 sm:min-h-[calc(100svh-5rem)] sm:py-20 lg:gap-12 lg:py-24">
-          <div className="max-w-4xl">
+          <div className="relative z-10 max-w-[40rem] xl:max-w-[42rem]">
             <Reveal>
               <p className="eyebrow">Aky Dijital • 360° dijital pazarlama ajansı</p>
-              <h1 className="mt-5 text-balance text-[clamp(2.25rem,8.4vw,4.5rem)] font-black leading-[1.03] tracking-normal text-white">
+              <h1 className="mt-5 text-balance text-[clamp(2.25rem,6.6vw,4.15rem)] font-black leading-[1.04] tracking-normal text-white">
                 Aky Dijital ile reklam bütçenizi{" "}
                 <span className="gradient-text">ölçülebilir büyümeye</span> dönüştürün.
               </h1>
