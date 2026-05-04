@@ -7,10 +7,9 @@ const bars = [68, 44, 76, 58, 86, 72, 94];
 
 export function HeroVisual() {
   return (
-    <div className="pointer-events-none absolute inset-x-0 top-20 -z-10 mx-auto h-[560px] max-w-7xl overflow-hidden px-4 sm:px-6 lg:px-8">
-      <div className="absolute inset-0 bg-grid-lines bg-[length:44px_44px] opacity-[0.18]" />
+    <div className="pointer-events-none relative z-0 hidden min-w-0 xl:block">
       <motion.div
-        className="absolute -right-44 top-8 hidden w-[46rem] rounded-lg border border-white/10 bg-carbon-900/80 p-5 shadow-glow backdrop-blur xl:block 2xl:w-[48rem]"
+        className="w-full rounded-lg border border-white/10 bg-carbon-900/80 p-5 shadow-glow backdrop-blur"
         initial={{ opacity: 0, x: 40 }}
         animate={{ opacity: 1, x: 0 }}
         transition={{ duration: 0.75, ease: [0.22, 1, 0.36, 1] }}
@@ -34,7 +33,7 @@ export function HeroVisual() {
           ].map((item) => {
             const Icon = item.icon;
             return (
-              <div key={item.label} className="border border-white/10 bg-white/[0.045] p-4">
+              <div key={item.label} className="min-w-0 border border-white/10 bg-white/[0.045] p-4">
                 <Icon className={`size-5 ${item.color}`} />
                 <p className="mt-5 text-2xl font-black text-white">{item.value}</p>
                 <p className="mt-1 text-xs font-medium text-fog-500">{item.label}</p>
@@ -64,20 +63,20 @@ export function HeroVisual() {
             </div>
           </div>
 
-          <div className="border border-white/10 bg-white/[0.045] p-4">
+          <div className="min-w-0 border border-white/10 bg-white/[0.045] p-4">
             <p className="text-sm font-bold text-white">Aktif büyüme akışı</p>
             <div className="mt-4 grid gap-3">
               {["Kreatif test", "Teklif optimizasyonu", "Landing page kontrolü", "Haftalık rapor"].map(
                 (item, index) => (
                   <motion.div
                     key={item}
-                    className="flex items-center gap-3 text-xs text-fog-300"
+                    className="flex min-w-0 items-center gap-3 text-xs text-fog-300"
                     initial={{ opacity: 0, x: 14 }}
                     animate={{ opacity: 1, x: 0 }}
                     transition={{ duration: 0.45, delay: 0.35 + index * 0.1 }}
                   >
                     <span className="size-2 bg-acid" />
-                    {item}
+                    <span className="min-w-0 truncate">{item}</span>
                   </motion.div>
                 )
               )}

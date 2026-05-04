@@ -21,8 +21,8 @@ export default function HomePage() {
   return (
     <main>
       <section className="relative isolate overflow-hidden border-b border-white/10">
-        <HeroVisual />
-        <div className="section-shell grid min-h-[calc(88svh-4.5rem)] items-center gap-10 py-14 sm:min-h-[calc(100svh-5rem)] sm:py-20 lg:gap-12 lg:py-24">
+        <div className="pointer-events-none absolute inset-0 -z-10 bg-grid-lines bg-[length:44px_44px] opacity-[0.12]" />
+        <div className="section-shell grid min-h-[calc(88svh-4.5rem)] items-center gap-10 py-14 sm:min-h-[calc(100svh-5rem)] sm:py-20 lg:gap-12 lg:py-24 xl:grid-cols-[minmax(0,40rem)_minmax(32rem,1fr)]">
           <div className="relative z-10 max-w-[40rem] xl:max-w-[42rem]">
             <Reveal>
               <p className="eyebrow">Aky Dijital • 360° dijital pazarlama ajansı</p>
@@ -56,6 +56,7 @@ export default function HomePage() {
               </div>
             </Reveal>
           </div>
+          <HeroVisual />
         </div>
       </section>
 
