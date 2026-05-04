@@ -1,9 +1,18 @@
+"use client";
+
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { ArrowUpRight, Mail, MapPin, Phone, Send } from "lucide-react";
 import { BrandLogo } from "@/components/BrandLogo";
 import { navItems, services } from "@/lib/content";
 
 export function Footer() {
+  const pathname = usePathname();
+
+  if (pathname.startsWith("/panel")) {
+    return null;
+  }
+
   return (
     <footer className="border-t border-white/10 bg-carbon-950">
       <div className="section-shell section-y grid gap-10 lg:grid-cols-[1.05fr_0.65fr_0.75fr_1.25fr]">
@@ -26,6 +35,9 @@ export function Footer() {
                 {item.label}
               </Link>
             ))}
+            <Link href="/panel/giris" className="text-sm text-fog-400 transition hover:text-acid">
+              Panel Girişi
+            </Link>
           </div>
         </div>
 

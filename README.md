@@ -34,8 +34,24 @@ http://127.0.0.1:3000
 - `/sektorler`
 - `/blog`
 - `/iletisim`
+- `/panel/giris`
+- `/panel`
 
 Stratejik marka, içerik, SEO ve geliştirici brief'i için `PROJECT_BRIEF.md` dosyasına bakın.
+
+## AI Panel Entegrasyonu
+
+- Giriş ekranı: `/panel/giris`
+- Panel ekranı: `/panel`
+- AI endpoint: `/api/panel-ai`
+
+OpenAI yanıtlarını canlı kullanmak için yayın ortamında `OPENAI_API_KEY` tanımlayın. İsteğe bağlı model değişkeni:
+
+```env
+OPENAI_MODEL=gpt-5.2
+```
+
+Meta Ads PHP panelinin güvenli kaynak kopyası `integrations/meta-ads-panel-source` altında tutulur. `.env`, `vendor`, upload dosyaları ve loglar bu kopyaya dahil edilmemiştir.
 
 ## Marka Varlıkları
 

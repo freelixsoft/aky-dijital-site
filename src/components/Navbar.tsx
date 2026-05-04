@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ArrowRight, Menu, PhoneCall, X } from "lucide-react";
+import { ArrowRight, LogIn, Menu, PhoneCall, X } from "lucide-react";
 import { useState } from "react";
 import { BrandLogo } from "@/components/BrandLogo";
 import { navItems } from "@/lib/content";
@@ -10,6 +10,10 @@ import { navItems } from "@/lib/content";
 export function Navbar() {
   const pathname = usePathname();
   const [isOpen, setIsOpen] = useState(false);
+
+  if (pathname.startsWith("/panel")) {
+    return null;
+  }
 
   return (
     <header className="sticky top-0 z-50 border-b border-white/10 bg-carbon-950/84 backdrop-blur-xl">
@@ -34,6 +38,10 @@ export function Navbar() {
         </div>
 
         <div className="hidden items-center gap-3 lg:flex">
+          <Link href="/panel/giris" className="button-secondary px-4">
+            <LogIn className="size-4" />
+            Giriş Yap
+          </Link>
           <a href="tel:+905451781534" className="button-secondary px-4">
             <PhoneCall className="size-4" />
             Ara
@@ -69,6 +77,14 @@ export function Navbar() {
                 {item.label}
               </Link>
             ))}
+            <Link
+              href="/panel/giris"
+              className="button-secondary mt-2 w-full"
+              onClick={() => setIsOpen(false)}
+            >
+              Giriş Yap
+              <LogIn className="size-4" />
+            </Link>
             <Link
               href="/iletisim"
               className="button-primary mt-2 w-full"
