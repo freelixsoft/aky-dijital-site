@@ -25,6 +25,22 @@ import { panelActions, panelCampaigns, panelMetrics, quickPrompts } from "@/lib/
 const fallbackAnswer =
   "AI ön analizi: En güçlü alan remarketing ve Advantage+ kampanyaları. Soğuk kitle kreatif testinde CTR düşük ve CPC yüksek görünüyor. İlk aksiyon olarak düşük CTR kampanyada kreatif açısını yenileyin, remarketing bütçesini kontrollü artırın ve ROAS düşük kampanyalarda hedef kitleyi yeniden segmentleyin.";
 
+type MetaConnectionResult = {
+  ok: boolean;
+  message: string;
+  code?: number;
+  type?: string;
+  account?: {
+    id?: string;
+    name?: string;
+    status?: string;
+    currency?: string;
+    timezone?: string;
+    amountSpent?: string;
+    balance?: string;
+  };
+};
+
 const metricToneClass = {
   electric: "text-electric bg-electric/12",
   acid: "text-acid bg-acid/12",
@@ -419,13 +435,34 @@ export function PanelChat() {
 
 export function MetaConnectionCard() {
   const [showToken, setShowToken] = useState(false);
-  const [notice, setNotice] = useState("");
+  const [connectionResult, setConnectionResult] = useState<MetaConnectionResult | null>(null);
+  const [isChecking, setIsChecking] = useState(false);
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setNotice(
-      "Önizleme modunda token kaydedilmedi. Canlı bağlantı için mevcut PHP backend veya Next.js API kayıt katmanı bağlanmalı."
-    );
+    const form = new FormData(event.currentTarget);
+    const accessToken = String(form.get("accessToken") || "");
+    const adAccountId = String(form.get("adAccountId") || "");
+
+    setIsChecking(true);
+    setConnectionResult(null);
+
+    try {
+      const response = await fetch("/api/meta-connection", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accessToken, adAccountId })
+      });
+      const data = (await response.json()) as MetaConnectionResult;
+      setConnectionResult(data);
+    } catch {
+      setConnectionResult({
+        ok: false,
+        message: "Bağlantı isteği gönderilemedi. Dev server ve internet bağlantısını kontrol edin."
+      });
+    } finally {
+      setIsChecking(false);
+    }
   }
 
   return (
@@ -450,10 +487,12 @@ export function MetaConnectionCard() {
           Meta Access Token
           <div className="flex min-w-0 overflow-hidden rounded-lg border border-white/10 bg-carbon-950">
             <input
+              name="accessToken"
               className="min-h-12 min-w-0 flex-1 bg-transparent px-4 py-3 text-white placeholder:text-fog-500"
               type={showToken ? "text" : "password"}
               placeholder="EAAB..."
               autoComplete="off"
+              required
             />
             <button
               className="flex w-12 shrink-0 items-center justify-center text-fog-400 transition hover:text-acid"
@@ -469,22 +508,49 @@ export function MetaConnectionCard() {
         <label className="grid min-w-0 gap-2 text-sm font-semibold text-fog-100">
           Reklam Hesabı ID
           <input
+            name="adAccountId"
             className="min-h-12 min-w-0 rounded-lg border border-white/10 bg-carbon-950 px-4 py-3 text-white placeholder:text-fog-500"
             placeholder="act_123456789"
             autoComplete="off"
+            required
           />
         </label>
 
         <div className="flex items-end">
-          <button className="button-primary" type="submit">
-            Bağlantıyı Kontrol Et
+          <button className="button-primary" type="submit" disabled={isChecking}>
+            {isChecking ? "Kontrol Ediliyor..." : "Bağlantıyı Kontrol Et"}
           </button>
         </div>
       </form>
 
-      {notice ? (
-        <div className="mt-4 rounded-lg border border-ember/25 bg-ember/10 px-4 py-3 text-sm leading-7 text-fog-200">
-          {notice}
+      {connectionResult ? (
+        <div
+          className={`mt-4 rounded-lg border px-4 py-3 text-sm leading-7 ${
+            connectionResult.ok
+              ? "border-acid/25 bg-acid/10 text-fog-100"
+              : "border-ember/25 bg-ember/10 text-fog-200"
+          }`}
+        >
+          <p className="font-bold text-white">{connectionResult.message}</p>
+          {connectionResult.account ? (
+            <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+              <span>
+                <strong className="text-fog-100">Hesap:</strong> {connectionResult.account.name}
+              </span>
+              <span>
+                <strong className="text-fog-100">ID:</strong> {connectionResult.account.id}
+              </span>
+              <span>
+                <strong className="text-fog-100">Durum:</strong> {connectionResult.account.status}
+              </span>
+              <span>
+                <strong className="text-fog-100">Para birimi:</strong> {connectionResult.account.currency || "-"}
+              </span>
+            </div>
+          ) : null}
+          {!connectionResult.ok && connectionResult.code ? (
+            <p className="mt-2 text-xs text-fog-400">Meta hata kodu: {connectionResult.code}</p>
+          ) : null}
         </div>
       ) : null}
     </div>
