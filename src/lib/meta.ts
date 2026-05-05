@@ -26,6 +26,20 @@ export type MetaCampaignInsight = {
   status: MetaCampaignStatus;
 };
 
+export type MetaEntityInsight = {
+  id: string;
+  name: string;
+  spend: number;
+  impressions: number;
+  clicks: number;
+  ctr: number;
+  cpc: number;
+  cpm: number;
+  results: number;
+  roas: number;
+  deliveryStatus?: string;
+};
+
 export type MetaSummary = {
   spend: number;
   impressions: number;
@@ -44,6 +58,15 @@ export type MetaInsightsData = {
   summary: MetaSummary;
   campaigns: MetaCampaignInsight[];
   datePreset: string;
+  dateFrom?: string;
+  dateTo?: string;
+  fetchedAt: string;
+};
+
+export type MetaCampaignDetailData = {
+  campaign: MetaCampaignInsight;
+  adsets: MetaEntityInsight[];
+  ads: Array<MetaEntityInsight & { adsetId?: string; adsetName?: string }>;
   fetchedAt: string;
 };
 
@@ -60,4 +83,38 @@ export type MetaInsightsApiResponse = {
   data?: MetaInsightsData;
   code?: number;
   type?: string;
+};
+
+export type MetaCampaignDetailApiResponse = {
+  ok: boolean;
+  message: string;
+  data?: MetaCampaignDetailData;
+  code?: number;
+  type?: string;
+};
+
+export type MetaActionReport = {
+  id: string;
+  createdAt: string;
+  title: string;
+  status: "success" | "error";
+  actionType: string;
+  entityName?: string;
+  entityId?: string;
+  message: string;
+  details?: string[];
+};
+
+export type MetaOptimizationAction = {
+  id: string;
+  type: "pause_campaign" | "scale_campaign_note" | "review_campaign" | "refresh_creative_note";
+  campaignId: string;
+  campaignName: string;
+  title: string;
+  reason: string;
+  impact: string;
+  executable: boolean;
+  payload?: {
+    status?: "ACTIVE" | "PAUSED";
+  };
 };

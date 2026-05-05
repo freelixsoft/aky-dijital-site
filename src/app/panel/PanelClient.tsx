@@ -4,15 +4,22 @@ import { AnimatePresence, motion } from "framer-motion";
 import {
   AlertCircle,
   BarChart3,
+  CalendarDays,
   CheckCircle2,
   ChevronRight,
   ClipboardList,
   Eye,
   EyeOff,
+  FileText,
   Gauge,
+  History,
+  Image as ImageIcon,
   LockKeyhole,
   LineChart,
   MessageSquareText,
+  MousePointerClick,
+  PauseCircle,
+  PlayCircle,
   RefreshCw,
   Rocket,
   Send,
@@ -24,14 +31,18 @@ import {
   X,
   type LucideIcon
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { Fragment, FormEvent, useEffect, useMemo, useState } from "react";
 import { quickPrompts } from "@/lib/panel";
 import type {
   MetaAccountSnapshot,
+  MetaActionReport,
+  MetaCampaignDetailApiResponse,
+  MetaCampaignDetailData,
   MetaCampaignInsight,
   MetaConnectionState,
   MetaInsightsApiResponse,
-  MetaInsightsData
+  MetaInsightsData,
+  MetaOptimizationAction
 } from "@/lib/meta";
 
 const fallbackAnswer =
@@ -69,6 +80,14 @@ const datePresetLabel: Record<string, string> = {
   custom: "Özel tarih"
 };
 
+const reportStorageKey = "aky-panel-optimization-reports";
+
+type DateFilter = {
+  datePreset: string;
+  dateFrom: string;
+  dateTo: string;
+};
+
 function formatNumber(value: number, fractionDigits = 0) {
   return new Intl.NumberFormat("tr-TR", {
     maximumFractionDigits: fractionDigits,
@@ -90,6 +109,14 @@ function formatPercent(value: number) {
 
 function formatRoas(value: number) {
   return `${formatNumber(value, 2)}x`;
+}
+
+function createReport(input: Omit<MetaActionReport, "id" | "createdAt">): MetaActionReport {
+  return {
+    ...input,
+    id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    createdAt: new Date().toISOString()
+  };
 }
 
 function buildLocalAnalysis(data: MetaInsightsData | null) {
@@ -116,48 +143,60 @@ function buildLocalAnalysis(data: MetaInsightsData | null) {
     .join(" ");
 }
 
-function buildOptimizationActions(campaigns: MetaCampaignInsight[]) {
+function buildOptimizationActions(campaigns: MetaCampaignInsight[]): MetaOptimizationAction[] {
   return campaigns.flatMap((campaign) => {
-    const actions: Array<{
-      icon: LucideIcon;
-      title: string;
-      text: string;
-      tone: "acid" | "electric" | "ember" | "pulse";
-    }> = [];
+    const actions: MetaOptimizationAction[] = [];
 
     if (campaign.spend > 0 && campaign.results <= 0 && campaign.ctr > 0 && campaign.ctr < 1) {
       actions.push({
-        icon: AlertCircle,
+        id: `pause-${campaign.campaignId}`,
+        type: "pause_campaign",
+        campaignId: campaign.campaignId,
+        campaignName: campaign.campaignName,
         title: "Durdurma adayı",
-        text: `${campaign.campaignName}: harcama var, sonuç yok ve CTR ${formatPercent(campaign.ctr)}. Kreatif veya kitle yenilenene kadar bütçe kesilmeli.`,
-        tone: "ember"
+        reason: `Harcama var, sonuç yok ve CTR ${formatPercent(campaign.ctr)}.`,
+        impact: "Kampanyayı PAUSED durumuna al",
+        executable: true,
+        payload: { status: "PAUSED" }
       });
     }
 
     if (campaign.roas >= 3) {
       actions.push({
-        icon: LineChart,
+        id: `scale-${campaign.campaignId}`,
+        type: "scale_campaign_note",
+        campaignId: campaign.campaignId,
+        campaignName: campaign.campaignName,
         title: "Ölçekleme fırsatı",
-        text: `${campaign.campaignName}: ${formatRoas(campaign.roas)} ROAS ile güçlü. Bütçe artışı kontrollü test edilebilir.`,
-        tone: "acid"
+        reason: `${formatRoas(campaign.roas)} ROAS güçlü görünüyor.`,
+        impact: "Kontrollü bütçe artışı için manuel plan çıkar",
+        executable: false
       });
     }
 
     if (campaign.cpc > 20) {
       actions.push({
-        icon: Gauge,
+        id: `review-${campaign.campaignId}`,
+        type: "review_campaign",
+        campaignId: campaign.campaignId,
+        campaignName: campaign.campaignName,
         title: "Yüksek CPC",
-        text: `${campaign.campaignName}: CPC ${formatCurrency(campaign.cpc)} seviyesinde. İlk aksiyon kreatif ve teklif mesajı testi olmalı.`,
-        tone: "pulse"
+        reason: `CPC ${formatCurrency(campaign.cpc)} seviyesinde.`,
+        impact: "Kreatif, hedefleme ve teklif mesajını incele",
+        executable: false
       });
     }
 
     if (campaign.roas > 0 && campaign.roas < 1.5) {
       actions.push({
-        icon: SlidersHorizontal,
+        id: `creative-${campaign.campaignId}`,
+        type: "refresh_creative_note",
+        campaignId: campaign.campaignId,
+        campaignName: campaign.campaignName,
         title: "Verimlilik riski",
-        text: `${campaign.campaignName}: ROAS ${formatRoas(campaign.roas)}. Bütçe dağılımı, hedefleme ve landing page uyumu tekrar incelenmeli.`,
-        tone: "electric"
+        reason: `ROAS ${formatRoas(campaign.roas)} düşük.`,
+        impact: "Yeni kreatif açısı ve landing page kontrolü öner",
+        executable: false
       });
     }
 
@@ -253,13 +292,44 @@ export function PanelWorkspace() {
   const [activeModule, setActiveModule] = useState<PanelModuleId | null>(null);
   const [connection, setConnection] = useState<MetaConnectionState | null>(null);
   const [metaData, setMetaData] = useState<MetaInsightsData | null>(null);
+  const [dateFilter, setDateFilter] = useState<DateFilter>({
+    datePreset: "last_30d",
+    dateFrom: "",
+    dateTo: ""
+  });
+  const [reports, setReports] = useState<MetaActionReport[]>([]);
+  const [aiTaskLabel, setAiTaskLabel] = useState("");
   const [isLoadingData, setIsLoadingData] = useState(false);
   const [dataError, setDataError] = useState("");
   const [gateMessage, setGateMessage] = useState("Önce Meta bağlantısını kurunuz. Bağlantı kurulunca diğer modüller canlı reklam verisiyle açılır.");
   const activeModuleMeta = panelWorkspaceModules.find((module) => module.id === activeModule);
   const isConnected = Boolean(connection);
 
-  async function refreshMetaData(targetConnection = connection) {
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(reportStorageKey);
+      if (stored) {
+        setReports(JSON.parse(stored) as MetaActionReport[]);
+      }
+    } catch {
+      setReports([]);
+    }
+  }, []);
+
+  function saveReport(report: MetaActionReport) {
+    setReports((current) => {
+      const next = [report, ...current].slice(0, 30);
+      window.localStorage.setItem(reportStorageKey, JSON.stringify(next));
+      return next;
+    });
+  }
+
+  function runAiTask<T>(label: string, task: () => Promise<T>) {
+    setAiTaskLabel(label);
+    return task().finally(() => setAiTaskLabel(""));
+  }
+
+  async function refreshMetaData(targetConnection = connection, nextFilter = dateFilter) {
     if (!targetConnection) return;
 
     setIsLoadingData(true);
@@ -272,7 +342,9 @@ export function PanelWorkspace() {
         body: JSON.stringify({
           accessToken: targetConnection.accessToken,
           adAccountId: targetConnection.adAccountId,
-          datePreset: "last_30d"
+          datePreset: nextFilter.datePreset,
+          dateFrom: nextFilter.dateFrom,
+          dateTo: nextFilter.dateTo
         })
       });
       const result = (await response.json()) as MetaInsightsApiResponse;
@@ -303,6 +375,13 @@ export function PanelWorkspace() {
     setDataError("");
     setActiveModule("meta");
     setGateMessage("Meta bağlantısı sıfırlandı. Diğer modülleri açmak için yeniden bağlantı kurunuz.");
+  }
+
+  function handleDateChange(nextFilter: DateFilter) {
+    setDateFilter(nextFilter);
+    if (connection) {
+      void refreshMetaData(connection, nextFilter);
+    }
   }
 
   function handleModuleClick(module: PanelModule) {
@@ -430,11 +509,16 @@ export function PanelWorkspace() {
               activeModule={activeModuleMeta.id}
               connection={connection}
               data={metaData}
+              dateFilter={dateFilter}
+              reports={reports}
               isLoadingData={isLoadingData}
               dataError={dataError}
               onConnected={handleConnected}
               onDisconnected={handleDisconnect}
+              onDateChange={handleDateChange}
+              onReport={saveReport}
               onRefresh={() => void refreshMetaData()}
+              runAiTask={runAiTask}
             />
           </motion.div>
         ) : (
@@ -452,6 +536,7 @@ export function PanelWorkspace() {
           </motion.div>
         )}
       </AnimatePresence>
+      <AiProgressOverlay label={aiTaskLabel} />
     </div>
   );
 }
@@ -460,22 +545,32 @@ type ActivePanelModuleProps = {
   activeModule: PanelModuleId;
   connection: MetaConnectionState | null;
   data: MetaInsightsData | null;
+  dateFilter: DateFilter;
+  reports: MetaActionReport[];
   isLoadingData: boolean;
   dataError: string;
   onConnected: (connection: MetaConnectionState) => void;
   onDisconnected: () => void;
+  onDateChange: (filter: DateFilter) => void;
+  onReport: (report: MetaActionReport) => void;
   onRefresh: () => void;
+  runAiTask: <T>(label: string, task: () => Promise<T>) => Promise<T>;
 };
 
 function ActivePanelModule({
   activeModule,
   connection,
   data,
+  dateFilter,
+  reports,
   isLoadingData,
   dataError,
   onConnected,
   onDisconnected,
-  onRefresh
+  onDateChange,
+  onReport,
+  onRefresh,
+  runAiTask
 }: ActivePanelModuleProps) {
   if (activeModule === "meta") {
     return (
@@ -509,19 +604,37 @@ function ActivePanelModule({
 
   switch (activeModule) {
     case "ozet":
-      return <SummaryModule data={data} isLoadingData={isLoadingData} dataError={dataError} onRefresh={onRefresh} />;
+      return (
+        <SummaryModule
+          data={data}
+          dateFilter={dateFilter}
+          isLoadingData={isLoadingData}
+          dataError={dataError}
+          onDateChange={onDateChange}
+          onRefresh={onRefresh}
+        />
+      );
     case "kampanya":
-      return <CampaignCreatorCard connection={connection} data={data} />;
+      return <CampaignCreatorCard connection={connection} data={data} onRefresh={onRefresh} onReport={onReport} />;
     case "kreatif":
-      return <CreativeGeneratorCard data={data} />;
+      return <CreativeGeneratorCard data={data} runAiTask={runAiTask} />;
     case "analiz":
-      return <AiAnalysisCenter data={data} />;
+      return <AiAnalysisCenter data={data} runAiTask={runAiTask} />;
     case "optimizasyon":
-      return <OptimizationCenter data={data} onRefresh={onRefresh} />;
+      return (
+        <OptimizationCenter
+          connection={connection}
+          data={data}
+          reports={reports}
+          onRefresh={onRefresh}
+          onReport={onReport}
+          runAiTask={runAiTask}
+        />
+      );
     case "kampanyalar":
-      return <CampaignTableModule data={data} />;
+      return <CampaignTableModule connection={connection} data={data} dateFilter={dateFilter} onRefresh={onRefresh} onReport={onReport} />;
     case "chat":
-      return <PanelChat data={data} />;
+      return <PanelChat data={data} runAiTask={runAiTask} />;
     default:
       return null;
   }
@@ -578,15 +691,77 @@ function LiveDataState({
   );
 }
 
+function AiProgressOverlay({ label }: { label: string }) {
+  const [progress, setProgress] = useState(0);
+
+  useEffect(() => {
+    if (!label) {
+      setProgress(0);
+      return;
+    }
+
+    setProgress(4);
+    const timer = window.setInterval(() => {
+      setProgress((current) => {
+        if (current < 35) return current + 6;
+        if (current < 70) return current + 3;
+        if (current < 92) return current + 1;
+        return current;
+      });
+    }, 160);
+
+    return () => window.clearInterval(timer);
+  }, [label]);
+
+  if (!label) return null;
+
+  const radius = 54;
+  const circumference = 2 * Math.PI * radius;
+  const bounded = Math.min(progress, 98);
+  const offset = circumference - (bounded / 100) * circumference;
+
+  return (
+    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-carbon-950/75 p-4 backdrop-blur-lg">
+      <div className="w-full max-w-sm rounded-lg border border-white/10 bg-carbon-900 p-6 text-center shadow-glow">
+        <div className="relative mx-auto size-36">
+          <svg className="size-36 -rotate-90" viewBox="0 0 128 128" aria-hidden="true">
+            <circle cx="64" cy="64" r={radius} fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth="10" />
+            <circle
+              cx="64"
+              cy="64"
+              r={radius}
+              fill="none"
+              stroke="#b7ff3c"
+              strokeLinecap="round"
+              strokeWidth="10"
+              strokeDasharray={circumference}
+              strokeDashoffset={offset}
+            />
+          </svg>
+          <div className="absolute inset-0 flex items-center justify-center text-3xl font-black text-white">
+            %{Math.floor(bounded)}
+          </div>
+        </div>
+        <h3 className="mt-5 text-xl font-black text-white">AI Analiz yapılıyor</h3>
+        <p className="mt-2 text-sm leading-7 text-fog-400">{label}</p>
+      </div>
+    </div>
+  );
+}
+
 function SummaryModule({
   data,
+  dateFilter,
   isLoadingData,
   dataError,
+  onDateChange,
   onRefresh
 }: {
   data: MetaInsightsData;
+  dateFilter: DateFilter;
   isLoadingData: boolean;
   dataError: string;
+  onDateChange: (filter: DateFilter) => void;
   onRefresh: () => void;
 }) {
   const metrics = [
@@ -619,6 +794,30 @@ function SummaryModule({
       tone: "ember"
     }
   ] as const;
+  const topSpend = [...data.campaigns].sort((a, b) => b.spend - a.spend)[0];
+  const topRoas = [...data.campaigns].sort((a, b) => b.roas - a.roas)[0];
+  const worstCtr = [...data.campaigns].filter((campaign) => campaign.ctr > 0).sort((a, b) => a.ctr - b.ctr)[0];
+  const highestCpc = [...data.campaigns].sort((a, b) => b.cpc - a.cpc)[0];
+  const alerts = data.campaigns
+    .flatMap((campaign) => {
+      const items: string[] = [];
+      if (campaign.ctr > 0 && campaign.ctr < 1) items.push(`${campaign.campaignName}: CTR düşük (${formatPercent(campaign.ctr)})`);
+      if (campaign.cpc > 20) items.push(`${campaign.campaignName}: CPC yüksek (${formatCurrency(campaign.cpc, data.summary.currency)})`);
+      if (campaign.spend > 0 && campaign.results <= 0) items.push(`${campaign.campaignName}: harcama var ama sonuç yok`);
+      if (campaign.roas > 0 && campaign.roas < 1.5) items.push(`${campaign.campaignName}: ROAS düşük (${formatRoas(campaign.roas)})`);
+      return items;
+    })
+    .slice(0, 6);
+
+  function handleDateSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    onDateChange({
+      datePreset: String(form.get("datePreset") || "last_30d"),
+      dateFrom: String(form.get("dateFrom") || ""),
+      dateTo: String(form.get("dateTo") || "")
+    });
+  }
 
   return (
     <div id="ozet" className="surface scroll-mt-28 rounded-lg p-4 sm:p-5">
@@ -654,6 +853,33 @@ function SummaryModule({
         {new Date(data.fetchedAt).toLocaleString("tr-TR")}.
       </div>
 
+      <form className="mt-5 grid gap-4 rounded-lg border border-white/10 bg-carbon-950/60 p-4 lg:grid-cols-[1fr_1fr_1fr_auto]" onSubmit={handleDateSubmit}>
+        <label className="grid gap-2 text-sm font-semibold text-fog-100">
+          Tarih aralığı
+          <select name="datePreset" className="min-h-12 rounded-lg border border-white/10 bg-carbon-950 px-4 py-3 text-white" defaultValue={dateFilter.datePreset}>
+            {Object.entries(datePresetLabel).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="grid gap-2 text-sm font-semibold text-fog-100">
+          Başlangıç
+          <input name="dateFrom" type="date" defaultValue={dateFilter.dateFrom} className="min-h-12 rounded-lg border border-white/10 bg-carbon-950 px-4 py-3 text-white" />
+        </label>
+        <label className="grid gap-2 text-sm font-semibold text-fog-100">
+          Bitiş
+          <input name="dateTo" type="date" defaultValue={dateFilter.dateTo} className="min-h-12 rounded-lg border border-white/10 bg-carbon-950 px-4 py-3 text-white" />
+        </label>
+        <div className="flex items-end">
+          <button className="button-primary" type="submit" disabled={isLoadingData}>
+            Uygula
+            <CalendarDays className="size-4" />
+          </button>
+        </div>
+      </form>
+
       <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {metrics.map((metric) => (
           <div key={metric.label} className="rounded-lg border border-white/10 bg-carbon-950 p-5">
@@ -666,11 +892,144 @@ function SummaryModule({
           </div>
         ))}
       </div>
+
+      <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        {[
+          { title: "En çok harcama", value: topSpend?.campaignName || "-", helper: topSpend ? formatCurrency(topSpend.spend, data.summary.currency) : "Veri yok" },
+          { title: "En yüksek ROAS", value: topRoas?.campaignName || "-", helper: topRoas ? formatRoas(topRoas.roas) : "Veri yok" },
+          { title: "En düşük CTR", value: worstCtr?.campaignName || "-", helper: worstCtr ? formatPercent(worstCtr.ctr) : "Veri yok" },
+          { title: "En yüksek CPC", value: highestCpc?.campaignName || "-", helper: highestCpc ? formatCurrency(highestCpc.cpc, data.summary.currency) : "Veri yok" }
+        ].map((item) => (
+          <div key={item.title} className="rounded-lg border border-white/10 bg-white/[0.035] p-4">
+            <p className="text-xs font-bold uppercase tracking-[0.14em] text-acid">{item.title}</p>
+            <h3 className="mt-3 text-base font-black text-white">{item.value}</h3>
+            <p className="mt-2 text-sm text-fog-400">{item.helper}</p>
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-6 rounded-lg border border-white/10 bg-carbon-950/60 p-4">
+        <div className="flex items-center gap-3">
+          <AlertCircle className="size-5 text-ember" />
+          <h3 className="text-lg font-black text-white">Bilinmesi gereken ince sinyaller</h3>
+        </div>
+        <div className="mt-4 grid gap-2 text-sm leading-7 text-fog-300">
+          {alerts.length > 0 ? (
+            alerts.map((alert) => <p key={alert}>• {alert}</p>)
+          ) : (
+            <p>Kritik düşük CTR, yüksek CPC, sıfır sonuç veya düşük ROAS uyarısı görünmüyor.</p>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
 
-function CampaignTableModule({ data }: { data: MetaInsightsData }) {
+function CampaignTableModule({
+  connection,
+  data,
+  dateFilter,
+  onRefresh,
+  onReport
+}: {
+  connection: MetaConnectionState;
+  data: MetaInsightsData;
+  dateFilter: DateFilter;
+  onRefresh: () => void;
+  onReport: (report: MetaActionReport) => void;
+}) {
+  const [openCampaignId, setOpenCampaignId] = useState("");
+  const [detail, setDetail] = useState<MetaCampaignDetailData | null>(null);
+  const [detailError, setDetailError] = useState("");
+  const [isDetailLoading, setIsDetailLoading] = useState(false);
+  const [pendingAction, setPendingAction] = useState<{
+    action: "update_campaign_status";
+    entityId: string;
+    entityName: string;
+    status: "ACTIVE" | "PAUSED";
+  } | null>(null);
+
+  async function loadCampaignDetail(campaign: MetaCampaignInsight) {
+    const nextOpen = openCampaignId === campaign.campaignId ? "" : campaign.campaignId;
+    setOpenCampaignId(nextOpen);
+    setDetail(null);
+    setDetailError("");
+
+    if (!nextOpen) return;
+
+    setIsDetailLoading(true);
+    try {
+      const response = await fetch("/api/meta-campaign-detail", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          accessToken: connection.accessToken,
+          campaign,
+          ...dateFilter
+        })
+      });
+      const result = (await response.json()) as MetaCampaignDetailApiResponse;
+
+      if (!response.ok || !result.ok || !result.data) {
+        throw new Error(result.message || "Kampanya detayı alınamadı.");
+      }
+
+      setDetail(result.data);
+    } catch (error) {
+      setDetailError(error instanceof Error ? error.message : "Kampanya detayı alınamadı.");
+    } finally {
+      setIsDetailLoading(false);
+    }
+  }
+
+  async function applyCampaignStatus() {
+    if (!pendingAction) return;
+
+    const action = pendingAction;
+    setPendingAction(null);
+
+    try {
+      const response = await fetch("/api/meta-action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: action.action,
+          accessToken: connection.accessToken,
+          entityId: action.entityId,
+          status: action.status
+        })
+      });
+      const result = (await response.json()) as { ok?: boolean; message?: string };
+
+      if (!response.ok || !result.ok) {
+        throw new Error(result.message || "Meta kampanya durumu güncellenemedi.");
+      }
+
+      onReport(
+        createReport({
+          title: "Kampanya durumu güncellendi",
+          status: "success",
+          actionType: action.action,
+          entityName: action.entityName,
+          entityId: action.entityId,
+          message: `${action.entityName} kampanyası ${action.status} durumuna alındı.`
+        })
+      );
+      onRefresh();
+    } catch (error) {
+      onReport(
+        createReport({
+          title: "Kampanya müdahale hatası",
+          status: "error",
+          actionType: action.action,
+          entityName: action.entityName,
+          entityId: action.entityId,
+          message: error instanceof Error ? error.message : "Meta kampanya durumu güncellenemedi."
+        })
+      );
+    }
+  }
+
   return (
     <div id="kampanyalar" className="surface scroll-mt-28 overflow-hidden rounded-lg">
       <div className="border-b border-white/10 p-5">
@@ -694,37 +1053,184 @@ function CampaignTableModule({ data }: { data: MetaInsightsData }) {
               <th className="px-5 py-4">Sonuç</th>
               <th className="px-5 py-4">ROAS</th>
               <th className="px-5 py-4">Durum</th>
+              <th className="px-5 py-4">Aksiyon</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-white/10 text-fog-300">
             {data.campaigns.length > 0 ? (
               data.campaigns.map((campaign) => (
-                <tr key={campaign.campaignId}>
-                  <td className="px-5 py-4">
-                    <p className="font-semibold text-white">{campaign.campaignName}</p>
-                    <p className="mt-1 text-xs text-fog-500">
-                      {campaign.deliveryStatus || "status yok"} {campaign.objective ? `• ${campaign.objective}` : ""}
-                    </p>
+                <Fragment key={campaign.campaignId}>
+                  <tr>
+                    <td className="px-5 py-4">
+                      <p className="font-semibold text-white">{campaign.campaignName}</p>
+                      <p className="mt-1 text-xs text-fog-500">
+                        {campaign.deliveryStatus || "status yok"} {campaign.objective ? `• ${campaign.objective}` : ""}
+                      </p>
+                    </td>
+                    <td className="px-5 py-4">{formatCurrency(campaign.spend, data.summary.currency)}</td>
+                    <td className="px-5 py-4">{formatNumber(campaign.impressions)}</td>
+                    <td className="px-5 py-4">{formatNumber(campaign.clicks)}</td>
+                    <td className="px-5 py-4">{formatPercent(campaign.ctr)}</td>
+                    <td className="px-5 py-4">{formatCurrency(campaign.cpc, data.summary.currency)}</td>
+                    <td className="px-5 py-4">{formatCurrency(campaign.cpm, data.summary.currency)}</td>
+                    <td className="px-5 py-4">{formatNumber(campaign.results)}</td>
+                    <td className="px-5 py-4">{formatRoas(campaign.roas)}</td>
+                    <td className="px-5 py-4">
+                      <span className={`rounded-lg border px-3 py-1 text-xs font-bold ${campaignStatusClass[campaign.status]}`}>
+                        {campaign.status}
+                      </span>
+                    </td>
+                    <td className="px-5 py-4">
+                      <div className="flex flex-wrap gap-2">
+                        <button className="button-ghost px-2 py-1 text-xs" type="button" onClick={() => void loadCampaignDetail(campaign)}>
+                          Detay
+                          <MousePointerClick className="size-3.5" />
+                        </button>
+                        <button
+                          className="button-ghost px-2 py-1 text-xs text-ember"
+                          type="button"
+                          onClick={() =>
+                            setPendingAction({
+                              action: "update_campaign_status",
+                              entityId: campaign.campaignId,
+                              entityName: campaign.campaignName,
+                              status: "PAUSED"
+                            })
+                          }
+                        >
+                          Durdur
+                          <PauseCircle className="size-3.5" />
+                        </button>
+                        <button
+                          className="button-ghost px-2 py-1 text-xs text-acid"
+                          type="button"
+                          onClick={() =>
+                            setPendingAction({
+                              action: "update_campaign_status",
+                              entityId: campaign.campaignId,
+                              entityName: campaign.campaignName,
+                              status: "ACTIVE"
+                            })
+                          }
+                        >
+                          Aktifleştir
+                          <PlayCircle className="size-3.5" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                  {openCampaignId === campaign.campaignId ? (
+                    <tr key={`${campaign.campaignId}-detail`}>
+                      <td colSpan={11} className="bg-carbon-950/70 px-5 py-5">
+                        {isDetailLoading ? (
+                          <p className="text-sm text-fog-400">Kampanya detayı yükleniyor...</p>
+                        ) : detailError ? (
+                          <p className="text-sm text-ember">{detailError}</p>
+                        ) : detail ? (
+                          <div className="grid gap-5">
+                            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                              {[
+                                { label: "Ad set", value: String(detail.adsets.length) },
+                                { label: "Reklam", value: String(detail.ads.length) },
+                                { label: "Detay çekim", value: new Date(detail.fetchedAt).toLocaleString("tr-TR") },
+                                { label: "Campaign ID", value: detail.campaign.campaignId }
+                              ].map((item) => (
+                                <div key={item.label} className="rounded-lg border border-white/10 bg-white/[0.035] p-4">
+                                  <p className="text-xs font-bold uppercase tracking-[0.12em] text-fog-500">{item.label}</p>
+                                  <p className="mt-2 break-words text-sm font-bold text-white">{item.value}</p>
+                                </div>
+                              ))}
+                            </div>
+                            <div className="grid gap-4 xl:grid-cols-2">
+                              <MiniInsightTable title="Ad set detayları" rows={detail.adsets} currency={data.summary.currency} />
+                              <MiniInsightTable title="Reklam detayları" rows={detail.ads} currency={data.summary.currency} />
+                            </div>
+                          </div>
+                        ) : null}
+                      </td>
+                    </tr>
+                  ) : null}
+                </Fragment>
+              ))
+            ) : (
+              <tr>
+                <td className="px-5 py-8 text-center text-fog-400" colSpan={11}>
+                  Bu tarih aralığında kampanya insight verisi bulunamadı.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      {pendingAction ? (
+        <ConfirmDialog
+          title="Bu müdahaleyi uygulamak istediğine emin misin?"
+          text={`${pendingAction.entityName} kampanyası Meta üzerinde ${pendingAction.status} durumuna alınacak.`}
+          confirmLabel="Evet, uygula"
+          onCancel={() => setPendingAction(null)}
+          onConfirm={() => void applyCampaignStatus()}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function MiniInsightTable({
+  title,
+  rows,
+  currency
+}: {
+  title: string;
+  rows: Array<{
+    id: string;
+    name: string;
+    spend: number;
+    impressions: number;
+    clicks: number;
+    ctr: number;
+    cpc: number;
+    results: number;
+    roas: number;
+    deliveryStatus?: string;
+  }>;
+  currency?: string;
+}) {
+  return (
+    <div className="overflow-hidden rounded-lg border border-white/10 bg-carbon-900/80">
+      <div className="border-b border-white/10 p-4">
+        <h4 className="text-base font-black text-white">{title}</h4>
+      </div>
+      <div className="max-h-80 overflow-auto">
+        <table className="w-full min-w-[640px] text-left text-xs">
+          <thead className="bg-white/[0.04] uppercase tracking-[0.12em] text-fog-500">
+            <tr>
+              <th className="px-4 py-3">Ad</th>
+              <th className="px-4 py-3">Harcama</th>
+              <th className="px-4 py-3">CTR</th>
+              <th className="px-4 py-3">CPC</th>
+              <th className="px-4 py-3">Sonuç</th>
+              <th className="px-4 py-3">ROAS</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-white/10 text-fog-300">
+            {rows.length > 0 ? (
+              rows.map((row) => (
+                <tr key={row.id}>
+                  <td className="px-4 py-3">
+                    <p className="font-bold text-white">{row.name}</p>
+                    <p className="mt-1 text-fog-500">{row.deliveryStatus || row.id}</p>
                   </td>
-                  <td className="px-5 py-4">{formatCurrency(campaign.spend, data.summary.currency)}</td>
-                  <td className="px-5 py-4">{formatNumber(campaign.impressions)}</td>
-                  <td className="px-5 py-4">{formatNumber(campaign.clicks)}</td>
-                  <td className="px-5 py-4">{formatPercent(campaign.ctr)}</td>
-                  <td className="px-5 py-4">{formatCurrency(campaign.cpc, data.summary.currency)}</td>
-                  <td className="px-5 py-4">{formatCurrency(campaign.cpm, data.summary.currency)}</td>
-                  <td className="px-5 py-4">{formatNumber(campaign.results)}</td>
-                  <td className="px-5 py-4">{formatRoas(campaign.roas)}</td>
-                  <td className="px-5 py-4">
-                    <span className={`rounded-lg border px-3 py-1 text-xs font-bold ${campaignStatusClass[campaign.status]}`}>
-                      {campaign.status}
-                    </span>
-                  </td>
+                  <td className="px-4 py-3">{formatCurrency(row.spend, currency)}</td>
+                  <td className="px-4 py-3">{formatPercent(row.ctr)}</td>
+                  <td className="px-4 py-3">{formatCurrency(row.cpc, currency)}</td>
+                  <td className="px-4 py-3">{formatNumber(row.results)}</td>
+                  <td className="px-4 py-3">{formatRoas(row.roas)}</td>
                 </tr>
               ))
             ) : (
               <tr>
-                <td className="px-5 py-8 text-center text-fog-400" colSpan={10}>
-                  Bu tarih aralığında kampanya insight verisi bulunamadı.
+                <td colSpan={6} className="px-4 py-6 text-center text-fog-500">
+                  Bu seviyede veri bulunamadı.
                 </td>
               </tr>
             )}
@@ -735,7 +1241,45 @@ function CampaignTableModule({ data }: { data: MetaInsightsData }) {
   );
 }
 
-export function PanelChat({ data }: { data: MetaInsightsData }) {
+function ConfirmDialog({
+  title,
+  text,
+  confirmLabel,
+  onCancel,
+  onConfirm
+}: {
+  title: string;
+  text: string;
+  confirmLabel: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-carbon-950/75 p-4 backdrop-blur-md">
+      <div className="w-full max-w-md rounded-lg border border-white/10 bg-carbon-900 p-5 shadow-glow">
+        <h3 className="text-xl font-black text-white">{title}</h3>
+        <p className="mt-3 text-sm leading-7 text-fog-300">{text}</p>
+        <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:justify-end">
+          <button className="button-secondary" type="button" onClick={onCancel}>
+            Vazgeç
+          </button>
+          <button className="button-primary" type="button" onClick={onConfirm}>
+            {confirmLabel}
+            <CheckCircle2 className="size-4" />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function PanelChat({
+  data,
+  runAiTask
+}: {
+  data: MetaInsightsData;
+  runAiTask: <T>(label: string, task: () => Promise<T>) => Promise<T>;
+}) {
   const [message, setMessage] = useState("");
   const [answer, setAnswer] = useState(buildLocalAnalysis(data));
   const [isLoading, setIsLoading] = useState(false);
@@ -760,6 +1304,7 @@ export function PanelChat({ data }: { data: MetaInsightsData }) {
     setIsLoading(true);
 
     try {
+      await runAiTask("AI Chat canlı kampanya verisine göre yanıt hazırlıyor.", async () => {
       const response = await fetch("/api/panel-ai", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -767,6 +1312,7 @@ export function PanelChat({ data }: { data: MetaInsightsData }) {
       });
       const data = (await response.json()) as { answer?: string };
       setAnswer(data.answer || fallbackAnswer);
+      });
     } catch {
       setAnswer(fallbackAnswer);
     } finally {
@@ -1006,24 +1552,78 @@ export function MetaConnectionCard({
 
 export function CampaignCreatorCard({
   connection,
-  data
+  data,
+  onRefresh,
+  onReport
 }: {
   connection: MetaConnectionState;
   data: MetaInsightsData;
+  onRefresh: () => void;
+  onReport: (report: MetaActionReport) => void;
 }) {
   const [summary, setSummary] = useState("");
+  const [isCreating, setIsCreating] = useState(false);
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const name = String(form.get("campaignName") || "Yeni Meta kampanyası");
     const objective = String(form.get("objective") || "Satış");
     const budget = String(form.get("budget") || "Belirtilmedi");
     const audience = String(form.get("audience") || "Geniş hedef kitle");
+    const status = String(form.get("status") || "PAUSED") as "ACTIVE" | "PAUSED";
 
-    setSummary(
-      `${connection.account.name || "Bağlı Meta hesabı"} üzerinde ${name} için ${objective.toLowerCase()} hedefli kampanya taslağı hazır. Günlük bütçe ${budget}, ilk hedef kitle "${audience}". Yayın öncesi piksel/olay takibi, kreatif açıları ve landing page uyumu kontrol edilmeli.`
-    );
+    setIsCreating(true);
+    setSummary("");
+
+    try {
+      const response = await fetch("/api/meta-action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "create_campaign",
+          accessToken: connection.accessToken,
+          adAccountId: connection.adAccountId,
+          campaignName: name,
+          objective,
+          status
+        })
+      });
+      const result = (await response.json()) as { ok?: boolean; message?: string; id?: string };
+
+      if (!response.ok || !result.ok) {
+        throw new Error(result.message || "Kampanya oluşturulamadı.");
+      }
+
+      const message = `${connection.account.name || "Bağlı Meta hesabı"} üzerinde ${name} kampanyası oluşturuldu. Campaign ID: ${result.id}. Günlük bütçe/ad set/reklam katmanı için sonraki kurulum akışı ayrıca bağlanmalı. Girilen bütçe notu: ${budget}, hedef kitle: ${audience}.`;
+      setSummary(message);
+      onReport(
+        createReport({
+          title: "Kampanya oluşturuldu",
+          status: "success",
+          actionType: "create_campaign",
+          entityName: name,
+          entityId: result.id,
+          message,
+          details: [`Objective: ${objective}`, `Status: ${status}`, `Bütçe notu: ${budget}`, `Hedef kitle: ${audience}`]
+        })
+      );
+      onRefresh();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Kampanya oluşturulamadı.";
+      setSummary(message);
+      onReport(
+        createReport({
+          title: "Kampanya oluşturma hatası",
+          status: "error",
+          actionType: "create_campaign",
+          entityName: name,
+          message
+        })
+      );
+    } finally {
+      setIsCreating(false);
+    }
   }
 
   return (
@@ -1033,8 +1633,8 @@ export function CampaignCreatorCard({
           <p className="text-xs font-bold uppercase tracking-[0.16em] text-acid">Kampanya oluştur</p>
           <h2 className="mt-2 text-2xl font-black text-white">Meta kampanya taslağı</h2>
           <p className="mt-3 text-sm leading-7 text-fog-400">
-            Kampanya taslağı bağlı reklam hesabındaki mevcut performans verisiyle birlikte hazırlanır. Bu ekranda
-            yayınlama yapılmaz; canlı hesaba gönderilecek aksiyon ayrıca onaylı kurulum akışı ister.
+            Bu modül artık Meta hesabında gerçek kampanya oluşturur. Güvenli başlangıç için varsayılan durum
+            PAUSED gelir; ACTIVE seçersen kampanya aktif statüyle gönderilir.
           </p>
         </div>
         <span className="flex size-11 shrink-0 items-center justify-center rounded-lg bg-electric/12 text-electric">
@@ -1079,6 +1679,17 @@ export function CampaignCreatorCard({
           </select>
         </label>
         <label className="grid gap-2 text-sm font-semibold text-fog-100">
+          Meta Durumu
+          <select
+            name="status"
+            className="min-h-12 rounded-lg border border-white/10 bg-carbon-950 px-4 py-3 text-white"
+            defaultValue="PAUSED"
+          >
+            <option value="PAUSED">PAUSED - Güvenli taslak</option>
+            <option value="ACTIVE">ACTIVE - Aktif oluştur</option>
+          </select>
+        </label>
+        <label className="grid gap-2 text-sm font-semibold text-fog-100">
           Günlük Bütçe
           <input
             name="budget"
@@ -1103,8 +1714,8 @@ export function CampaignCreatorCard({
           />
         </label>
         <div className="lg:col-span-2">
-          <button className="button-primary" type="submit">
-            Kampanya Taslağı Oluştur
+          <button className="button-primary" type="submit" disabled={isCreating}>
+            {isCreating ? "Meta'da Oluşturuluyor..." : "Meta'da Kampanya Oluştur"}
             <Rocket className="size-4" />
           </button>
         </div>
@@ -1119,10 +1730,18 @@ export function CampaignCreatorCard({
   );
 }
 
-export function CreativeGeneratorCard({ data }: { data: MetaInsightsData }) {
+export function CreativeGeneratorCard({
+  data,
+  runAiTask
+}: {
+  data: MetaInsightsData;
+  runAiTask: <T>(label: string, task: () => Promise<T>) => Promise<T>;
+}) {
   const [creative, setCreative] = useState("");
+  const [imageUrl, setImageUrl] = useState("");
+  const [imageError, setImageError] = useState("");
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const product = String(form.get("product") || "ürün / hizmet");
@@ -1131,15 +1750,42 @@ export function CreativeGeneratorCard({ data }: { data: MetaInsightsData }) {
     const weakestCtr = [...data.campaigns].filter((campaign) => campaign.ctr > 0).sort((a, b) => a.ctr - b.ctr)[0];
     const topRoas = [...data.campaigns].sort((a, b) => b.roas - a.roas)[0];
 
-    setCreative(
-      `AI kreatif briefi: ${product} için ${audience} kitlesine yönelik ${format} formatında ilk 3 saniyede problem/istek gösterilmeli. Canlı hesaptaki sinyal: ${
+    const brief = `AI kreatif briefi: ${product} için ${audience} kitlesine yönelik ${format} formatında ilk 3 saniyede problem/istek gösterilmeli. Canlı hesaptaki sinyal: ${
         weakestCtr
           ? `${weakestCtr.campaignName} kampanyasında CTR ${formatPercent(weakestCtr.ctr)}, bu yüzden ilk karede fayda ve teklif daha net olmalı.`
           : "Düşük CTR sinyali yok, mevcut öğrenmelerden teklif netliği korunmalı."
       } ${
         topRoas && topRoas.roas > 0 ? `ROAS tarafında ${topRoas.campaignName} güçlü görünüyor; bu kampanyadaki mesaj açısı varyasyon olarak denenebilir.` : ""
-      } Başlık: "Daha fazla satış için reklamlarınızı veriye göre yönetin." Metin: "Aky Dijital, Meta kampanyalarınızı analiz eder, kreatif açıları test eder ve bütçenizi dönüşüme bağlar." CTA: "Ücretsiz strateji görüşmesi al."`
-    );
+      } Başlık: "Daha fazla satış için reklamlarınızı veriye göre yönetin." Metin: "Aky Dijital, Meta kampanyalarınızı analiz eder, kreatif açıları test eder ve bütçenizi dönüşüme bağlar." CTA: "Ücretsiz strateji görüşmesi al."`;
+
+    setCreative(brief);
+    setImageError("");
+    setImageUrl("");
+
+    await runAiTask("AI kreatif görseli üretiliyor, önizleme hazırlanıyor.", async () => {
+      const response = await fetch("/api/creative-image", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          product,
+          audience,
+          format,
+          brief,
+          campaignContext: {
+            summary: data.summary,
+            topCampaigns: data.campaigns.slice(0, 5)
+          }
+        })
+      });
+      const result = (await response.json()) as { ok?: boolean; message?: string; imageUrl?: string };
+
+      if (!result.ok || !result.imageUrl) {
+        setImageError(result.message || "AI görseli üretilemedi.");
+        return;
+      }
+
+      setImageUrl(result.imageUrl);
+    });
   }
 
   return (
@@ -1201,11 +1847,32 @@ export function CreativeGeneratorCard({ data }: { data: MetaInsightsData }) {
           {creative}
         </div>
       ) : null}
+      {imageError ? (
+        <div className="mt-5 rounded-lg border border-ember/25 bg-ember/10 p-4 text-sm leading-7 text-fog-200">
+          {imageError}
+        </div>
+      ) : null}
+      {imageUrl ? (
+        <div className="mt-5 overflow-hidden rounded-lg border border-white/10 bg-carbon-950">
+          <div className="flex items-center gap-3 border-b border-white/10 p-4">
+            <ImageIcon className="size-5 text-acid" />
+            <h3 className="text-lg font-black text-white">Görsel önizleme</h3>
+          </div>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={imageUrl} alt="AI kreatif önizleme" className="h-auto w-full" />
+        </div>
+      ) : null}
     </div>
   );
 }
 
-export function AiAnalysisCenter({ data }: { data: MetaInsightsData }) {
+export function AiAnalysisCenter({
+  data,
+  runAiTask
+}: {
+  data: MetaInsightsData;
+  runAiTask: <T>(label: string, task: () => Promise<T>) => Promise<T>;
+}) {
   const [analysis, setAnalysis] = useState(buildLocalAnalysis(data));
   const [isLoading, setIsLoading] = useState(false);
 
@@ -1216,6 +1883,7 @@ export function AiAnalysisCenter({ data }: { data: MetaInsightsData }) {
   async function refreshAnalysis() {
     setIsLoading(true);
     try {
+      await runAiTask("Canlı Meta verileri yorumlanıyor ve aksiyon önerileri çıkarılıyor.", async () => {
       const response = await fetch("/api/panel-ai", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1227,6 +1895,7 @@ export function AiAnalysisCenter({ data }: { data: MetaInsightsData }) {
       });
       const result = (await response.json()) as { answer?: string };
       setAnalysis(result.answer || buildLocalAnalysis(data));
+      });
     } finally {
       setIsLoading(false);
     }
@@ -1256,13 +1925,105 @@ export function AiAnalysisCenter({ data }: { data: MetaInsightsData }) {
 }
 
 export function OptimizationCenter({
+  connection,
   data,
-  onRefresh
+  reports,
+  onRefresh,
+  onReport,
+  runAiTask
 }: {
+  connection: MetaConnectionState;
   data: MetaInsightsData;
+  reports: MetaActionReport[];
   onRefresh: () => void;
+  onReport: (report: MetaActionReport) => void;
+  runAiTask: <T>(label: string, task: () => Promise<T>) => Promise<T>;
 }) {
   const actions = buildOptimizationActions(data.campaigns);
+  const [pendingAction, setPendingAction] = useState<MetaOptimizationAction | null>(null);
+  const [aiNotes, setAiNotes] = useState("");
+
+  async function generateOptimizationPlan() {
+    await runAiTask("AI optimizasyon önerileri canlı reklam verisine göre hazırlanıyor.", async () => {
+      const response = await fetch("/api/panel-ai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message:
+            "Bu Meta Ads hesabı için optimizasyon planı üret. Riskli kampanyalar, ölçekleme adayları, kreatif yenileme notları ve uygulama önceliği ver.",
+          metrics: data.summary,
+          campaigns: data.campaigns
+        })
+      });
+      const result = (await response.json()) as { answer?: string };
+      setAiNotes(result.answer || "AI optimizasyon notu üretilemedi.");
+    });
+  }
+
+  async function applyOptimizationAction() {
+    if (!pendingAction) return;
+
+    const action = pendingAction;
+    setPendingAction(null);
+
+    if (!action.executable || !action.payload?.status) {
+      onReport(
+        createReport({
+          title: "Optimizasyon notu kaydedildi",
+          status: "success",
+          actionType: action.type,
+          entityName: action.campaignName,
+          entityId: action.campaignId,
+          message: `${action.title}: ${action.impact}`,
+          details: [action.reason]
+        })
+      );
+      return;
+    }
+
+    try {
+      const response = await fetch("/api/meta-action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "update_campaign_status",
+          accessToken: connection.accessToken,
+          entityId: action.campaignId,
+          status: action.payload.status
+        })
+      });
+      const result = (await response.json()) as { ok?: boolean; message?: string };
+
+      if (!response.ok || !result.ok) {
+        throw new Error(result.message || "Optimizasyon uygulanamadı.");
+      }
+
+      onReport(
+        createReport({
+          title: "AI optimizasyon uygulandı",
+          status: "success",
+          actionType: action.type,
+          entityName: action.campaignName,
+          entityId: action.campaignId,
+          message: `${action.campaignName} için ${action.impact} aksiyonu uygulandı.`,
+          details: [action.reason, `Yeni durum: ${action.payload.status}`]
+        })
+      );
+      onRefresh();
+    } catch (error) {
+      onReport(
+        createReport({
+          title: "AI optimizasyon hatası",
+          status: "error",
+          actionType: action.type,
+          entityName: action.campaignName,
+          entityId: action.campaignId,
+          message: error instanceof Error ? error.message : "Optimizasyon uygulanamadı.",
+          details: [action.reason]
+        })
+      );
+    }
+  }
 
   return (
     <div id="optimizasyon" className="surface scroll-mt-28 rounded-lg p-4 sm:p-5">
@@ -1278,18 +2039,32 @@ export function OptimizationCenter({
           Veriyi Yenile
           <RefreshCw className="size-4" />
         </button>
+        <button className="button-primary" type="button" onClick={() => void generateOptimizationPlan()}>
+          AI Plan Üret
+          <Sparkles className="size-4" />
+        </button>
       </div>
+      {aiNotes ? (
+        <div className="mt-5 rounded-lg border border-electric/25 bg-electric/10 p-4 text-sm leading-7 text-fog-200">
+          {aiNotes}
+        </div>
+      ) : null}
       <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {actions.length > 0 ? (
-          actions.map((action, index) => {
-          const Icon = action.icon;
-          return (
-            <div key={`${action.title}-${index}`} className="rounded-lg border border-white/10 bg-carbon-950 p-4">
-              <Icon className={`size-5 ${action.tone === "ember" ? "text-ember" : action.tone === "pulse" ? "text-pulse" : action.tone === "electric" ? "text-electric" : "text-acid"}`} />
-              <h3 className="mt-4 text-base font-black text-white">{action.title}</h3>
-              <p className="mt-2 text-sm leading-7 text-fog-400">{action.text}</p>
-            </div>
-          );
+          actions.map((action) => {
+            const Icon = action.executable ? PauseCircle : FileText;
+            return (
+              <div key={action.id} className="rounded-lg border border-white/10 bg-carbon-950 p-4">
+                <Icon className={`size-5 ${action.executable ? "text-ember" : "text-acid"}`} />
+                <h3 className="mt-4 text-base font-black text-white">{action.title}</h3>
+                <p className="mt-2 text-sm font-semibold text-fog-200">{action.campaignName}</p>
+                <p className="mt-2 text-sm leading-7 text-fog-400">{action.reason}</p>
+                <p className="mt-2 text-sm leading-7 text-fog-300">{action.impact}</p>
+                <button className="button-secondary mt-4 w-full" type="button" onClick={() => setPendingAction(action)}>
+                  {action.executable ? "Uygula" : "Raporlara Kaydet"}
+                </button>
+              </div>
+            );
           })
         ) : (
           <div className="rounded-lg border border-acid/25 bg-acid/10 p-4 text-sm leading-7 text-fog-200 md:col-span-2 xl:col-span-4">
@@ -1302,6 +2077,49 @@ export function OptimizationCenter({
         Bu ekran canlı veriden öneri üretir. Kampanya durdurma, bütçe değiştirme veya yayınlama gibi işlemler ayrıca
         seçmeli onay adımıyla bağlanmalıdır.
       </div>
+      <div className="mt-6 rounded-lg border border-white/10 bg-carbon-950/60 p-4">
+        <div className="flex items-center gap-3">
+          <History className="size-5 text-acid" />
+          <h3 className="text-lg font-black text-white">Optimizasyon raporları</h3>
+        </div>
+        <div className="mt-4 grid gap-3">
+          {reports.length > 0 ? (
+            reports.map((report) => (
+              <div key={report.id} className="rounded-lg border border-white/10 bg-white/[0.035] p-4 text-sm leading-7">
+                <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="font-black text-white">{report.title}</p>
+                  <span className={report.status === "success" ? "text-acid" : "text-ember"}>
+                    {report.status === "success" ? "Başarılı" : "Hata"} • {new Date(report.createdAt).toLocaleString("tr-TR")}
+                  </span>
+                </div>
+                <p className="mt-2 text-fog-300">{report.message}</p>
+                {report.details?.length ? (
+                  <div className="mt-2 grid gap-1 text-fog-500">
+                    {report.details.map((detail) => (
+                      <span key={detail}>• {detail}</span>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ))
+          ) : (
+            <p className="text-sm leading-7 text-fog-400">Henüz kayıtlı optimizasyon raporu yok.</p>
+          )}
+        </div>
+      </div>
+      {pendingAction ? (
+        <ConfirmDialog
+          title="AI önerisini uygulamak istediğine emin misin?"
+          text={
+            pendingAction.executable
+              ? `${pendingAction.campaignName} kampanyasında "${pendingAction.impact}" aksiyonu Meta üzerinde uygulanacak.`
+              : `${pendingAction.campaignName} için bu öneri raporlara not olarak kaydedilecek.`
+          }
+          confirmLabel={pendingAction.executable ? "Evet, uygula" : "Raporlara kaydet"}
+          onCancel={() => setPendingAction(null)}
+          onConfirm={() => void applyOptimizationAction()}
+        />
+      ) : null}
     </div>
   );
 }

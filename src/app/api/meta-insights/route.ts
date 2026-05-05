@@ -241,7 +241,8 @@ async function graphList<T>(endpoint: string, params: Record<string, string>, ac
 }
 
 function buildDateParams(body: RequestBody): { datePreset: string; params: Record<string, string> } {
-  const datePreset = allowedDatePresets.has(body.datePreset || "") ? body.datePreset || "last_30d" : "last_30d";
+  const requestedPreset = allowedDatePresets.has(body.datePreset || "") ? body.datePreset || "last_30d" : "last_30d";
+  const datePreset = requestedPreset === "custom" && (!body.dateFrom || !body.dateTo) ? "last_30d" : requestedPreset;
 
   if (datePreset === "custom" && body.dateFrom && body.dateTo) {
     return {
@@ -357,6 +358,8 @@ export async function POST(request: Request) {
         summary,
         campaigns,
         datePreset,
+        dateFrom: body.dateFrom,
+        dateTo: body.dateTo,
         fetchedAt: new Date().toISOString()
       }
     });
