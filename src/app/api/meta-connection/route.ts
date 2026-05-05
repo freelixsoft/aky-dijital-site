@@ -16,7 +16,7 @@ type MetaAccountResponse = {
   };
 };
 
-const META_API_VERSION = "v21.0";
+const META_API_VERSION = process.env.META_API_VERSION || "v23.0";
 
 function normalizeAdAccountId(value: string) {
   const trimmed = value.trim();
