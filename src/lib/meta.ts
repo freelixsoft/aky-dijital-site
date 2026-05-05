@@ -9,10 +9,13 @@ export type MetaAccountSnapshot = {
 };
 
 export type MetaCampaignStatus = "Güçlü" | "İncele" | "Riskli";
+export type MetaCampaignType = "sales" | "traffic" | "messages" | "leads" | "awareness" | "engagement" | "app" | "other";
 
 export type MetaCampaignInsight = {
   campaignId: string;
   campaignName: string;
+  campaignType: MetaCampaignType;
+  campaignTypeLabel: string;
   spend: number;
   impressions: number;
   clicks: number;
@@ -20,6 +23,8 @@ export type MetaCampaignInsight = {
   cpc: number;
   cpm: number;
   results: number;
+  primaryResultLabel: string;
+  primaryResultAction?: string;
   roas: number;
   objective?: string;
   deliveryStatus?: string;
@@ -36,6 +41,8 @@ export type MetaEntityInsight = {
   cpc: number;
   cpm: number;
   results: number;
+  primaryResultLabel?: string;
+  primaryResultAction?: string;
   roas: number;
   deliveryStatus?: string;
 };

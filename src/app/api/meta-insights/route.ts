@@ -3,6 +3,7 @@ import type {
   MetaAccountSnapshot,
   MetaCampaignInsight,
   MetaCampaignStatus,
+  MetaCampaignType,
   MetaInsightsApiResponse,
   MetaSummary
 } from "@/lib/meta";
@@ -44,6 +45,13 @@ type MetaInsightsRow = {
   cpm?: string;
   actions?: Array<{ action_type?: string; value?: string }>;
   purchase_roas?: Array<{ value?: string }>;
+};
+
+type PrimaryResult = {
+  value: number;
+  label: string;
+  actionType?: string;
+  campaignType: MetaCampaignType;
 };
 
 type MetaCampaignMetaRow = {
@@ -100,29 +108,148 @@ function getStatusLabel(status?: number) {
   return typeof status === "number" ? labels[status] || `Durum kodu: ${status}` : "Bilinmiyor";
 }
 
-function extractResultsCount(actions?: MetaInsightsRow["actions"]) {
-  const priorityActions = [
-    "purchase",
-    "omni_purchase",
-    "offsite_conversion.fb_pixel_purchase",
-    "onsite_conversion.purchase",
-    "lead",
-    "onsite_conversion.lead_grouped",
-    "offsite_conversion.fb_pixel_lead",
-    "complete_registration",
-    "offsite_conversion.fb_pixel_complete_registration"
-  ];
+function getCampaignTypeLabel(type: MetaCampaignType) {
+  const labels: Record<MetaCampaignType, string> = {
+    sales: "Satış / dönüşüm",
+    traffic: "Trafik / profil ziyareti",
+    messages: "Mesaj",
+    leads: "Lead",
+    awareness: "Bilinirlik",
+    engagement: "Etkileşim",
+    app: "Uygulama",
+    other: "Diğer"
+  };
 
-  if (!Array.isArray(actions)) return 0;
+  return labels[type];
+}
 
-  for (const targetType of priorityActions) {
-    const action = actions.find((item) => item.action_type === targetType);
+function inferCampaignTypeFromObjective(objective?: string): MetaCampaignType {
+  const value = (objective || "").toUpperCase();
+
+  if (value.includes("SALES") || value.includes("CONVERSIONS") || value.includes("PRODUCT_CATALOG")) return "sales";
+  if (value.includes("LEAD")) return "leads";
+  if (value.includes("TRAFFIC") || value.includes("LINK_CLICKS") || value.includes("LANDING_PAGE")) return "traffic";
+  if (value.includes("MESSAGES")) return "messages";
+  if (value.includes("AWARENESS") || value.includes("REACH")) return "awareness";
+  if (value.includes("ENGAGEMENT") || value.includes("VIDEO") || value.includes("POST")) return "engagement";
+  if (value.includes("APP")) return "app";
+
+  return "other";
+}
+
+function findActionValue(actions: MetaInsightsRow["actions"], actionTypes: string[]) {
+  if (!Array.isArray(actions)) return undefined;
+
+  for (const actionType of actionTypes) {
+    const action = actions.find((item) => item.action_type === actionType);
     if (action) {
-      return toNumber(action.value);
+      return { value: toNumber(action.value), actionType };
     }
   }
 
-  return 0;
+  return undefined;
+}
+
+function inferTypeFromActions(actions?: MetaInsightsRow["actions"]) {
+  if (!Array.isArray(actions)) return undefined;
+  const actionTypes = actions.map((item) => item.action_type || "").join("|").toLowerCase();
+
+  if (actionTypes.includes("messaging") || actionTypes.includes("message")) return "messages";
+  if (actionTypes.includes("profile_visit") || actionTypes.includes("landing_page_view") || actionTypes.includes("link_click")) {
+    return "traffic";
+  }
+  if (actionTypes.includes("lead")) return "leads";
+  if (actionTypes.includes("purchase")) return "sales";
+  if (actionTypes.includes("post_engagement") || actionTypes.includes("page_engagement") || actionTypes.includes("video_view")) {
+    return "engagement";
+  }
+
+  return undefined;
+}
+
+function extractPrimaryResult(
+  actions: MetaInsightsRow["actions"],
+  objective: string | undefined,
+  clicks: number,
+  impressions: number
+): PrimaryResult {
+  const objectiveType = inferCampaignTypeFromObjective(objective);
+  const actionType = inferTypeFromActions(actions);
+  const campaignType = actionType || objectiveType;
+  const actionGroups: Record<MetaCampaignType, { label: string; actions: string[] }> = {
+    sales: {
+      label: "Satın alma",
+      actions: ["purchase", "omni_purchase", "offsite_conversion.fb_pixel_purchase", "onsite_conversion.purchase"]
+    },
+    leads: {
+      label: "Lead",
+      actions: [
+        "lead",
+        "onsite_conversion.lead_grouped",
+        "offsite_conversion.fb_pixel_lead",
+        "complete_registration",
+        "offsite_conversion.fb_pixel_complete_registration"
+      ]
+    },
+    messages: {
+      label: "Mesaj görüşmesi",
+      actions: [
+        "onsite_conversion.messaging_conversation_started_7d",
+        "onsite_conversion.messaging_first_reply",
+        "onsite_conversion.total_messaging_connection",
+        "messaging_conversation_started_7d"
+      ]
+    },
+    traffic: {
+      label: "Profil / site ziyareti",
+      actions: [
+        "profile_visit",
+        "onsite_conversion.profile_visit",
+        "onsite_conversion.instagram_profile_visit",
+        "instagram_profile_visit",
+        "landing_page_view",
+        "link_click"
+      ]
+    },
+    engagement: {
+      label: "Etkileşim",
+      actions: ["post_engagement", "page_engagement", "video_view", "post_reaction"]
+    },
+    awareness: {
+      label: "Gösterim",
+      actions: []
+    },
+    app: {
+      label: "Uygulama aksiyonu",
+      actions: ["mobile_app_install", "app_custom_event", "omni_app_install"]
+    },
+    other: {
+      label: "Hedef sonuç",
+      actions: []
+    }
+  };
+
+  const group = actionGroups[campaignType];
+  const match = findActionValue(actions, group.actions);
+
+  if (match) {
+    return {
+      value: match.value,
+      label: group.label,
+      actionType: match.actionType,
+      campaignType
+    };
+  }
+
+  if (campaignType === "traffic") {
+    return { value: clicks, label: "Tıklama / ziyaret", campaignType };
+  }
+
+  if (campaignType === "awareness") {
+    return { value: impressions, label: "Gösterim", campaignType };
+  }
+
+  return { value: 0, label: group.label, campaignType };
 }
 
 function extractRoasValue(purchaseRoas?: MetaInsightsRow["purchase_roas"]) {
@@ -131,15 +258,33 @@ function extractRoasValue(purchaseRoas?: MetaInsightsRow["purchase_roas"]) {
 }
 
 function classifyCampaign(campaign: Omit<MetaCampaignInsight, "status">): MetaCampaignStatus {
-  if (
-    (campaign.spend > 0 && campaign.results <= 0 && campaign.ctr > 0 && campaign.ctr < 1) ||
-    campaign.cpc > 20 ||
-    (campaign.roas > 0 && campaign.roas < 1.5)
-  ) {
+  const costPerResult = campaign.results > 0 ? campaign.spend / campaign.results : 0;
+  const hasNoPrimaryResult = campaign.spend > 0 && campaign.results <= 0;
+  const lowCtr = campaign.ctr > 0 && campaign.ctr < 1;
+
+  if (campaign.campaignType === "sales") {
+    if (hasNoPrimaryResult || lowCtr || campaign.cpc > 20 || (campaign.roas > 0 && campaign.roas < 1.5)) return "Riskli";
+    if (campaign.roas >= 3 || (campaign.results > 0 && campaign.ctr >= 2)) return "Güçlü";
+    return "İncele";
+  }
+
+  if (campaign.campaignType === "traffic") {
+    if (hasNoPrimaryResult || lowCtr || campaign.cpc > 20) return "Riskli";
+    if (campaign.ctr >= 2 || campaign.results >= 100) return "Güçlü";
+    return "İncele";
+  }
+
+  if (campaign.campaignType === "messages" || campaign.campaignType === "leads") {
+    if (hasNoPrimaryResult || lowCtr || (costPerResult > 0 && costPerResult > 500)) return "Riskli";
+    if (campaign.results >= 10 && campaign.ctr >= 1.5) return "Güçlü";
+    return "İncele";
+  }
+
+  if (hasNoPrimaryResult || lowCtr || campaign.cpc > 20) {
     return "Riskli";
   }
 
-  if (campaign.roas >= 3 || campaign.ctr >= 2.5) {
+  if (campaign.ctr >= 2.5 || campaign.results >= 1000) {
     return "Güçlü";
   }
 
@@ -147,6 +292,7 @@ function classifyCampaign(campaign: Omit<MetaCampaignInsight, "status">): MetaCa
 }
 
 function buildSummary(campaigns: MetaCampaignInsight[], currency?: string): MetaSummary {
+  const salesCampaigns = campaigns.filter((campaign) => campaign.campaignType === "sales" && campaign.roas > 0);
   const summary = campaigns.reduce(
     (total, campaign) => ({
       spend: total.spend + campaign.spend,
@@ -172,7 +318,7 @@ function buildSummary(campaigns: MetaCampaignInsight[], currency?: string): Meta
     ctr: summary.impressions > 0 ? (summary.clicks / summary.impressions) * 100 : 0,
     cpc: summary.clicks > 0 ? summary.spend / summary.clicks : 0,
     cpm: summary.impressions > 0 ? (summary.spend / summary.impressions) * 1000 : 0,
-    roas: campaigns.length > 0 ? summary.roasTotal / campaigns.length : 0,
+    roas: salesCampaigns.length > 0 ? salesCampaigns.reduce((total, campaign) => total + campaign.roas, 0) / salesCampaigns.length : 0,
     campaignCount: campaigns.length,
     currency
   };
@@ -326,16 +472,23 @@ export async function POST(request: Request) {
       .filter((row) => row.campaign_id)
       .map((row) => {
         const meta = campaignMetaById.get(row.campaign_id);
+        const clicks = toNumber(row.clicks);
+        const impressions = toNumber(row.impressions);
+        const primaryResult = extractPrimaryResult(row.actions, meta?.objective, clicks, impressions);
         const campaign = {
           campaignId: row.campaign_id || "",
           campaignName: row.campaign_name || meta?.name || "Adsız kampanya",
+          campaignType: primaryResult.campaignType,
+          campaignTypeLabel: getCampaignTypeLabel(primaryResult.campaignType),
           spend: toNumber(row.spend),
-          impressions: toNumber(row.impressions),
-          clicks: toNumber(row.clicks),
+          impressions,
+          clicks,
           ctr: toNumber(row.ctr),
           cpc: toNumber(row.cpc),
           cpm: toNumber(row.cpm),
-          results: extractResultsCount(row.actions),
+          results: primaryResult.value,
+          primaryResultLabel: primaryResult.label,
+          primaryResultAction: primaryResult.actionType,
           roas: extractRoasValue(row.purchase_roas),
           objective: meta?.objective,
           deliveryStatus: meta?.effective_status || meta?.status

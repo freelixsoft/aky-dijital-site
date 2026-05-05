@@ -59,29 +59,47 @@ function toNumber(value: unknown) {
   return Number.isFinite(numeric) ? numeric : 0;
 }
 
-function extractResultsCount(actions?: MetaInsightRow["actions"]) {
-  const priorityActions = [
-    "purchase",
-    "omni_purchase",
-    "offsite_conversion.fb_pixel_purchase",
-    "onsite_conversion.purchase",
-    "lead",
-    "onsite_conversion.lead_grouped",
-    "offsite_conversion.fb_pixel_lead",
-    "complete_registration",
-    "offsite_conversion.fb_pixel_complete_registration"
-  ];
+function findActionValue(actions: MetaInsightRow["actions"], actionTypes: string[]) {
+  if (!Array.isArray(actions)) return undefined;
 
-  if (!Array.isArray(actions)) return 0;
+  for (const actionType of actionTypes) {
+    const action = actions.find((item) => item.action_type === actionType);
+    if (action) return { value: toNumber(action.value), actionType };
+  }
 
-  for (const targetType of priorityActions) {
-    const action = actions.find((item) => item.action_type === targetType);
-    if (action) {
-      return toNumber(action.value);
+  return undefined;
+}
+
+function extractResults(actions: MetaInsightRow["actions"], campaign: MetaCampaignInsight) {
+  if (campaign.primaryResultAction) {
+    const direct = findActionValue(actions, [campaign.primaryResultAction]);
+    if (direct) {
+      return {
+        value: direct.value,
+        label: campaign.primaryResultLabel,
+        actionType: direct.actionType
+      };
     }
   }
 
-  return 0;
+  const priorityActions = [
+    ...(campaign.campaignType === "sales" ? ["purchase", "omni_purchase", "offsite_conversion.fb_pixel_purchase", "onsite_conversion.purchase"] : []),
+    ...(campaign.campaignType === "leads" ? ["lead", "onsite_conversion.lead_grouped", "offsite_conversion.fb_pixel_lead"] : []),
+    ...(campaign.campaignType === "messages"
+      ? ["onsite_conversion.messaging_conversation_started_7d", "onsite_conversion.messaging_first_reply", "messaging_conversation_started_7d"]
+      : []),
+    ...(campaign.campaignType === "traffic"
+      ? ["profile_visit", "onsite_conversion.profile_visit", "onsite_conversion.instagram_profile_visit", "landing_page_view", "link_click"]
+      : []),
+    ...(campaign.campaignType === "engagement" ? ["post_engagement", "page_engagement", "video_view", "post_reaction"] : [])
+  ];
+  const match = findActionValue(actions, priorityActions);
+
+  return {
+    value: match?.value || 0,
+    label: campaign.primaryResultLabel,
+    actionType: match?.actionType
+  };
 }
 
 function extractRoasValue(purchaseRoas?: MetaInsightRow["purchase_roas"]) {
@@ -142,7 +160,9 @@ async function graphList<T>(endpoint: string, params: Record<string, string>, ac
   return rows;
 }
 
-function mapAdSet(row: MetaInsightRow, meta?: MetaEntityMetaRow): MetaEntityInsight {
+function mapAdSet(row: MetaInsightRow, campaign: MetaCampaignInsight, meta?: MetaEntityMetaRow): MetaEntityInsight {
+  const primaryResult = extractResults(row.actions, campaign);
+
   return {
     id: row.adset_id || "",
     name: row.adset_name || meta?.name || "Adsız ad set",
@@ -152,13 +172,17 @@ function mapAdSet(row: MetaInsightRow, meta?: MetaEntityMetaRow): MetaEntityInsi
     ctr: toNumber(row.ctr),
     cpc: toNumber(row.cpc),
     cpm: toNumber(row.cpm),
-    results: extractResultsCount(row.actions),
+    results: primaryResult.value,
+    primaryResultLabel: primaryResult.label,
+    primaryResultAction: primaryResult.actionType,
     roas: extractRoasValue(row.purchase_roas),
     deliveryStatus: meta?.effective_status || meta?.status
   };
 }
 
-function mapAd(row: MetaInsightRow, meta?: MetaEntityMetaRow): MetaCampaignDetailData["ads"][number] {
+function mapAd(row: MetaInsightRow, campaign: MetaCampaignInsight, meta?: MetaEntityMetaRow): MetaCampaignDetailData["ads"][number] {
+  const primaryResult = extractResults(row.actions, campaign);
+
   return {
     id: row.ad_id || "",
     name: row.ad_name || meta?.name || "Adsız reklam",
@@ -170,7 +194,9 @@ function mapAd(row: MetaInsightRow, meta?: MetaEntityMetaRow): MetaCampaignDetai
     ctr: toNumber(row.ctr),
     cpc: toNumber(row.cpc),
     cpm: toNumber(row.cpm),
-    results: extractResultsCount(row.actions),
+    results: primaryResult.value,
+    primaryResultLabel: primaryResult.label,
+    primaryResultAction: primaryResult.actionType,
     roas: extractRoasValue(row.purchase_roas),
     deliveryStatus: meta?.effective_status || meta?.status
   };
@@ -238,8 +264,8 @@ export async function POST(request: Request) {
       message: "Kampanya detayı canlı olarak alındı.",
       data: {
         campaign,
-        adsets: adsetRows.filter((row) => row.adset_id).map((row) => mapAdSet(row, adsetMetaById.get(row.adset_id))),
-        ads: adRows.filter((row) => row.ad_id).map((row) => mapAd(row, adMetaById.get(row.ad_id))),
+        adsets: adsetRows.filter((row) => row.adset_id).map((row) => mapAdSet(row, campaign, adsetMetaById.get(row.adset_id))),
+        ads: adRows.filter((row) => row.ad_id).map((row) => mapAd(row, campaign, adMetaById.get(row.ad_id))),
         fetchedAt: new Date().toISOString()
       }
     });

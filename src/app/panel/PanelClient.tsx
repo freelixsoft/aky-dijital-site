@@ -141,7 +141,7 @@ function countRiskSignals(data: MetaInsightsData) {
   return data.campaigns.filter((campaign) => {
     const lowCtr = campaign.ctr > 0 && campaign.ctr < 1;
     const noResultSpend = campaign.spend > 0 && campaign.results <= 0;
-    const weakRoas = campaign.roas > 0 && campaign.roas < 1.5;
+    const weakRoas = campaign.campaignType === "sales" && campaign.roas > 0 && campaign.roas < 1.5;
     return campaign.status === "Riskli" || lowCtr || noResultSpend || weakRoas;
   }).length;
 }
@@ -188,6 +188,67 @@ function getCustomerActionLabel(action: MetaOptimizationAction) {
   return "Kontrol Notu Kaydet";
 }
 
+function getCampaignCostPerResult(campaign: MetaCampaignInsight) {
+  return campaign.results > 0 ? campaign.spend / campaign.results : 0;
+}
+
+function isCampaignDeliveryActive(campaign: MetaCampaignInsight) {
+  return (campaign.deliveryStatus || "").toUpperCase() === "ACTIVE";
+}
+
+function getCampaignStatusExplanation(campaign: MetaCampaignInsight, currency = "TRY") {
+  const costPerResult = getCampaignCostPerResult(campaign);
+  const resultLabel = campaign.primaryResultLabel || "hedef sonuç";
+  const notes: string[] = [];
+
+  if (campaign.status === "Güçlü") {
+    notes.push(`${campaign.campaignTypeLabel || "Kampanya"} hedefi için iyi sinyal veriyor.`);
+    if (campaign.campaignType === "sales" && campaign.roas >= 3) notes.push(`Satış tarafında ROAS ${formatRoas(campaign.roas)} seviyesinde.`);
+    if (campaign.ctr >= 2) notes.push(`CTR ${formatPercent(campaign.ctr)} olduğu için reklam ilgi çekiyor.`);
+    if (campaign.results > 0) {
+      notes.push(`${formatNumber(campaign.results)} ${resultLabel.toLowerCase()} alınmış; sonuç başı maliyet ${formatCurrency(costPerResult, currency)}.`);
+    }
+    notes.push("Bu kampanyada acele kapatma yerine kontrollü bütçe ve kreatif varyasyon testi daha doğru olur.");
+  } else if (campaign.status === "İncele") {
+    notes.push(`${campaign.campaignTypeLabel || "Kampanya"} hedefinde net güçlü ya da kritik risk sinyali yok.`);
+    if (campaign.results > 0) notes.push(`${formatNumber(campaign.results)} ${resultLabel.toLowerCase()} var ama performans daha yakından izlenmeli.`);
+    if (campaign.ctr > 0) notes.push(`CTR ${formatPercent(campaign.ctr)}, CPC ${formatCurrency(campaign.cpc, currency)}.`);
+    notes.push("Kreatif, hedef kitle ve bütçe dağılımı kontrol edilirse karar daha sağlıklı verilir.");
+  } else {
+    if (campaign.spend > 0 && campaign.results <= 0) notes.push(`${formatCurrency(campaign.spend, currency)} harcama var ama ${resultLabel.toLowerCase()} yok.`);
+    if (campaign.ctr > 0 && campaign.ctr < 1) notes.push(`CTR ${formatPercent(campaign.ctr)}; reklam yeterince ilgi çekmiyor olabilir.`);
+    if (campaign.cpc > 20) notes.push(`CPC ${formatCurrency(campaign.cpc, currency)} seviyesinde; tıklama maliyeti yüksek.`);
+    if (campaign.campaignType === "sales" && campaign.roas > 0 && campaign.roas < 1.5) {
+      notes.push(`Satış kampanyasında ROAS ${formatRoas(campaign.roas)}; gelir tarafı zayıf.`);
+    }
+    notes.push("Bu kampanya için önce kreatif ve hedef kitle kontrolü, gerekirse durdurma önerilir.");
+  }
+
+  return notes;
+}
+
+function buildInterventionBrief(data: MetaInsightsData, goals: CustomerGoals) {
+  const health = buildCustomerHealth(data, goals);
+  const riskCampaigns = data.campaigns.filter((campaign) => campaign.status === "Riskli").slice(0, 6);
+
+  return [
+    `Genel skor ${health.score}/100: ${health.message}`,
+    `Bu dönemde ${formatCurrency(data.summary.spend, data.summary.currency)} harcandı. Hedef bütçeye göre kullanım %${formatNumber(
+      health.budgetUsage * 100,
+      0
+    )}.`,
+    `Toplam hedef sonuç ${formatNumber(data.summary.results)}; sonuç başı maliyet ${formatCurrency(
+      health.costPerResult,
+      data.summary.currency
+    )}.`,
+    riskCampaigns.length > 0
+      ? `Müdahale önceliği: ${riskCampaigns
+          .map((campaign) => `${campaign.campaignName} (${campaign.primaryResultLabel || "hedef sonuç"}: ${formatNumber(campaign.results)})`)
+          .join(", ")}.`
+      : "Riskli kampanya görünmüyor; düzenli takip yeterli."
+  ];
+}
+
 function createReport(input: Omit<MetaActionReport, "id" | "createdAt">): MetaActionReport {
   return {
     ...input,
@@ -201,7 +262,7 @@ function buildLocalAnalysis(data: MetaInsightsData | null) {
     return "Canlı Meta verisi henüz yüklenmedi. Meta bağlantısını kurup verileri yeniledikten sonra AI analiz bu hesaptaki kampanyalara göre hazırlanır.";
   }
 
-  const topRoas = [...data.campaigns].sort((a, b) => b.roas - a.roas)[0];
+  const topRoas = [...data.campaigns].filter((campaign) => campaign.campaignType === "sales" && campaign.roas > 0).sort((a, b) => b.roas - a.roas)[0];
   const highestCpc = [...data.campaigns].sort((a, b) => b.cpc - a.cpc)[0];
   const lowCtr = data.campaigns.find((campaign) => campaign.ctr > 0 && campaign.ctr < 1);
 
@@ -209,8 +270,8 @@ function buildLocalAnalysis(data: MetaInsightsData | null) {
     `Canlı ön analiz: ${data.summary.campaignCount} kampanyada toplam harcama ${formatCurrency(
       data.summary.spend,
       data.summary.currency
-    )}, ortalama CTR ${formatPercent(data.summary.ctr)} ve ROAS ${formatRoas(data.summary.roas)}.`,
-    topRoas ? `En güçlü kampanya: ${topRoas.campaignName} (${formatRoas(topRoas.roas)} ROAS).` : "",
+    )}, ortalama CTR ${formatPercent(data.summary.ctr)} ve toplam hedef sonuç ${formatNumber(data.summary.results)}.`,
+    topRoas ? `Satış tarafında en güçlü kampanya: ${topRoas.campaignName} (${formatRoas(topRoas.roas)} ROAS).` : "",
     highestCpc && highestCpc.cpc > 0
       ? `En pahalı tıklama: ${highestCpc.campaignName} (${formatCurrency(highestCpc.cpc, data.summary.currency)} CPC).`
       : "",
@@ -223,6 +284,7 @@ function buildLocalAnalysis(data: MetaInsightsData | null) {
 function buildOptimizationActions(campaigns: MetaCampaignInsight[]): MetaOptimizationAction[] {
   return campaigns.flatMap((campaign) => {
     const actions: MetaOptimizationAction[] = [];
+    const resultLabel = campaign.primaryResultLabel || "hedef sonuç";
 
     if (campaign.spend > 0 && campaign.results <= 0 && campaign.ctr > 0 && campaign.ctr < 1) {
       actions.push({
@@ -231,14 +293,14 @@ function buildOptimizationActions(campaigns: MetaCampaignInsight[]): MetaOptimiz
         campaignId: campaign.campaignId,
         campaignName: campaign.campaignName,
         title: "Durdurma adayı",
-        reason: `Harcama var, sonuç yok ve CTR ${formatPercent(campaign.ctr)}.`,
+        reason: `Harcama var, ${resultLabel.toLowerCase()} yok ve CTR ${formatPercent(campaign.ctr)}.`,
         impact: "Kampanyayı PAUSED durumuna al",
         executable: true,
         payload: { status: "PAUSED" }
       });
     }
 
-    if (campaign.roas >= 3) {
+    if (campaign.campaignType === "sales" && campaign.roas >= 3) {
       actions.push({
         id: `scale-${campaign.campaignId}`,
         type: "scale_campaign_note",
@@ -247,6 +309,19 @@ function buildOptimizationActions(campaigns: MetaCampaignInsight[]): MetaOptimiz
         title: "Ölçekleme fırsatı",
         reason: `${formatRoas(campaign.roas)} ROAS güçlü görünüyor.`,
         impact: "Kontrollü bütçe artışı için manuel plan çıkar",
+        executable: false
+      });
+    }
+
+    if (campaign.campaignType !== "sales" && campaign.results > 0 && campaign.ctr >= 2) {
+      actions.push({
+        id: `scale-${campaign.campaignId}`,
+        type: "scale_campaign_note",
+        campaignId: campaign.campaignId,
+        campaignName: campaign.campaignName,
+        title: "Büyütme fırsatı",
+        reason: `${campaign.campaignTypeLabel} kampanyasında ${formatNumber(campaign.results)} ${resultLabel.toLowerCase()} ve ${formatPercent(campaign.ctr)} CTR var.`,
+        impact: "Aynı hedefte kontrollü bütçe ve kreatif varyasyonu planla",
         executable: false
       });
     }
@@ -264,7 +339,7 @@ function buildOptimizationActions(campaigns: MetaCampaignInsight[]): MetaOptimiz
       });
     }
 
-    if (campaign.roas > 0 && campaign.roas < 1.5) {
+    if (campaign.campaignType === "sales" && campaign.roas > 0 && campaign.roas < 1.5) {
       actions.push({
         id: `creative-${campaign.campaignId}`,
         type: "refresh_creative_note",
@@ -719,6 +794,7 @@ function ActivePanelModule({
           onDateChange={onDateChange}
           onCustomerGoalsChange={onCustomerGoalsChange}
           onRefresh={onRefresh}
+          runAiTask={runAiTask}
         />
       );
     case "kampanya":
@@ -864,7 +940,8 @@ function SummaryModule({
   dataError,
   onDateChange,
   onCustomerGoalsChange,
-  onRefresh
+  onRefresh,
+  runAiTask
 }: {
   data: MetaInsightsData;
   dateFilter: DateFilter;
@@ -874,6 +951,7 @@ function SummaryModule({
   onDateChange: (filter: DateFilter) => void;
   onCustomerGoalsChange: (goals: CustomerGoals) => void;
   onRefresh: () => void;
+  runAiTask: <T>(label: string, task: () => Promise<T>) => Promise<T>;
 }) {
   const metrics = [
     {
@@ -906,16 +984,23 @@ function SummaryModule({
     }
   ] as const;
   const topSpend = [...data.campaigns].sort((a, b) => b.spend - a.spend)[0];
-  const topRoas = [...data.campaigns].sort((a, b) => b.roas - a.roas)[0];
+  const topRoas = [...data.campaigns].filter((campaign) => campaign.campaignType === "sales" && campaign.roas > 0).sort((a, b) => b.roas - a.roas)[0];
+  const topEfficiency = topRoas || [...data.campaigns].sort((a, b) => b.results - a.results || b.ctr - a.ctr)[0];
   const worstCtr = [...data.campaigns].filter((campaign) => campaign.ctr > 0).sort((a, b) => a.ctr - b.ctr)[0];
   const highestCpc = [...data.campaigns].sort((a, b) => b.cpc - a.cpc)[0];
+  const [goalNotice, setGoalNotice] = useState("");
+  const [interventionAnalysis, setInterventionAnalysis] = useState("");
+  const [isInterventionOpen, setIsInterventionOpen] = useState(false);
   const alerts = data.campaigns
     .flatMap((campaign) => {
       const items: string[] = [];
+      const resultLabel = campaign.primaryResultLabel || "hedef sonuç";
       if (campaign.ctr > 0 && campaign.ctr < 1) items.push(`${campaign.campaignName}: CTR düşük (${formatPercent(campaign.ctr)})`);
       if (campaign.cpc > 20) items.push(`${campaign.campaignName}: CPC yüksek (${formatCurrency(campaign.cpc, data.summary.currency)})`);
-      if (campaign.spend > 0 && campaign.results <= 0) items.push(`${campaign.campaignName}: harcama var ama sonuç yok`);
-      if (campaign.roas > 0 && campaign.roas < 1.5) items.push(`${campaign.campaignName}: ROAS düşük (${formatRoas(campaign.roas)})`);
+      if (campaign.spend > 0 && campaign.results <= 0) items.push(`${campaign.campaignName}: harcama var ama ${resultLabel.toLowerCase()} yok`);
+      if (campaign.campaignType === "sales" && campaign.roas > 0 && campaign.roas < 1.5) {
+        items.push(`${campaign.campaignName}: ROAS düşük (${formatRoas(campaign.roas)})`);
+      }
       return items;
     })
     .slice(0, 6);
@@ -936,7 +1021,13 @@ function SummaryModule({
       health.resultProgress * 100,
       0
     )}.`,
-    topRoas ? `En iyi çalışan kampanya ${topRoas.campaignName}; ROAS ${formatRoas(topRoas.roas)}.` : "",
+    topRoas
+      ? `Satış tarafında en iyi çalışan kampanya ${topRoas.campaignName}; ROAS ${formatRoas(topRoas.roas)}.`
+      : topEfficiency
+        ? `En çok hedef sonuç üreten kampanya ${topEfficiency.campaignName}; ${formatNumber(topEfficiency.results)} ${(
+            topEfficiency.primaryResultLabel || "hedef sonuç"
+          ).toLowerCase()}.`
+        : "",
     alerts[0] ? `İlk bakılacak konu: ${alerts[0]}.` : "Şu an kritik bir uyarı görünmüyor; düzenli takip yeterli."
   ].filter(Boolean);
 
@@ -958,6 +1049,35 @@ function SummaryModule({
       targetResults: Math.max(0, Number(form.get("targetResults")) || 0),
       maxCostPerResult: Math.max(0, Number(form.get("maxCostPerResult")) || 0)
     });
+    setGoalNotice("Hedef kaydedildi. Panel skoru ve müşteri özeti artık bu hedeflere göre hesaplanır.");
+    window.setTimeout(() => setGoalNotice(""), 3500);
+  }
+
+  async function openInterventionAnalysis() {
+    const localBrief = buildInterventionBrief(data, customerGoals).join("\n");
+    setInterventionAnalysis(localBrief);
+    setIsInterventionOpen(true);
+
+    try {
+      await runAiTask("Müşterinin anlayacağı dilde müdahale analizi hazırlanıyor.", async () => {
+        const response = await fetch("/api/panel-ai", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message:
+              "Bu Meta Ads hesabı için müşterinin anlayacağı sade Türkçeyle müdahale analizi yaz. Satış kampanyalarını, trafik/profil ziyareti kampanyalarını, mesaj ve lead kampanyalarını ayrı değerlendir. Önce ne oluyor, sonra neden önemli, sonra hangi sırayla müdahale edilmeli yaz. Gereksiz teknik jargon kullanma.",
+            metrics: data.summary,
+            campaigns: data.campaigns,
+            customerGoals,
+            localBrief
+          })
+        });
+        const result = (await response.json()) as { answer?: string };
+        setInterventionAnalysis(result.answer || localBrief);
+      });
+    } catch {
+      setInterventionAnalysis(localBrief);
+    }
   }
 
   return (
@@ -994,8 +1114,8 @@ function SummaryModule({
         {new Date(data.fetchedAt).toLocaleString("tr-TR")}.
       </div>
 
-      <div className="mt-5 grid gap-4 xl:grid-cols-[0.95fr_1.05fr]">
-        <div className="rounded-lg border border-white/10 bg-carbon-950 p-5">
+      <div className="mt-5 grid min-w-0 gap-4 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
+        <div className="min-w-0 rounded-lg border border-white/10 bg-carbon-950 p-5">
           <div className="flex flex-col gap-5 sm:flex-row sm:items-center">
             <div
               className="flex size-32 shrink-0 items-center justify-center rounded-full p-2"
@@ -1007,10 +1127,14 @@ function SummaryModule({
                 {health.score}
               </div>
             </div>
-            <div>
-              <span className={`inline-flex rounded-lg border px-3 py-2 text-xs font-black uppercase tracking-[0.12em] ${healthToneClass}`}>
+            <div className="min-w-0">
+              <button
+                type="button"
+                onClick={() => void openInterventionAnalysis()}
+                className={`inline-flex max-w-full rounded-lg border px-3 py-2 text-left text-xs font-black uppercase tracking-[0.12em] transition hover:bg-white/5 ${healthToneClass}`}
+              >
                 {health.label}
-              </span>
+              </button>
               <h3 className="mt-4 text-xl font-black text-white">Reklam durumu</h3>
               <p className="mt-2 text-sm leading-7 text-fog-300">{health.message}</p>
               <p className="mt-2 text-xs font-semibold text-fog-500">
@@ -1020,19 +1144,22 @@ function SummaryModule({
           </div>
         </div>
 
-        <form className="rounded-lg border border-white/10 bg-carbon-950 p-5" onSubmit={handleGoalsSubmit}>
-          <div className="flex items-center justify-between gap-3">
-            <div>
+        <form className="min-w-0 overflow-hidden rounded-lg border border-white/10 bg-carbon-950 p-5" onSubmit={handleGoalsSubmit}>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0">
               <p className="text-xs font-bold uppercase tracking-[0.14em] text-acid">Müşteri hedefleri</p>
               <h3 className="mt-2 text-xl font-black text-white">Hedefe göre takip</h3>
+              <p className="mt-2 max-w-2xl text-sm leading-7 text-fog-400">
+                Bu alan panelin reklam skorunu müşterinin gerçek bütçe, sonuç ve maliyet hedeflerine göre okumasını sağlar.
+              </p>
             </div>
-            <button className="button-secondary px-4" type="submit">
+            <button className="button-secondary w-full justify-center px-4 sm:w-auto" type="submit">
               Kaydet
               <CheckCircle2 className="size-4" />
             </button>
           </div>
-          <div className="mt-4 grid gap-3 sm:grid-cols-3">
-            <label className="grid gap-2 text-xs font-bold uppercase tracking-[0.12em] text-fog-400">
+          <div className="mt-4 grid min-w-0 gap-3 md:grid-cols-3">
+            <label className="grid min-w-0 gap-2 text-xs font-bold uppercase tracking-[0.08em] text-fog-400">
               Aylık bütçe
               <input
                 name="monthlyBudget"
@@ -1040,10 +1167,10 @@ function SummaryModule({
                 min="0"
                 step="100"
                 defaultValue={customerGoals.monthlyBudget}
-                className="min-h-11 rounded-lg border border-white/10 bg-carbon-900 px-3 py-2 text-sm text-white"
+                className="min-h-11 min-w-0 rounded-lg border border-white/10 bg-carbon-900 px-3 py-2 text-sm text-white"
               />
             </label>
-            <label className="grid gap-2 text-xs font-bold uppercase tracking-[0.12em] text-fog-400">
+            <label className="grid min-w-0 gap-2 text-xs font-bold uppercase tracking-[0.08em] text-fog-400">
               Sonuç hedefi
               <input
                 name="targetResults"
@@ -1051,10 +1178,10 @@ function SummaryModule({
                 min="0"
                 step="1"
                 defaultValue={customerGoals.targetResults}
-                className="min-h-11 rounded-lg border border-white/10 bg-carbon-900 px-3 py-2 text-sm text-white"
+                className="min-h-11 min-w-0 rounded-lg border border-white/10 bg-carbon-900 px-3 py-2 text-sm text-white"
               />
             </label>
-            <label className="grid gap-2 text-xs font-bold uppercase tracking-[0.12em] text-fog-400">
+            <label className="grid min-w-0 gap-2 text-xs font-bold uppercase tracking-[0.08em] text-fog-400">
               Maks. sonuç maliyeti
               <input
                 name="maxCostPerResult"
@@ -1062,10 +1189,15 @@ function SummaryModule({
                 min="0"
                 step="10"
                 defaultValue={customerGoals.maxCostPerResult}
-                className="min-h-11 rounded-lg border border-white/10 bg-carbon-900 px-3 py-2 text-sm text-white"
+                className="min-h-11 min-w-0 rounded-lg border border-white/10 bg-carbon-900 px-3 py-2 text-sm text-white"
               />
             </label>
           </div>
+          {goalNotice ? (
+            <div className="mt-4 rounded-lg border border-acid/25 bg-acid/10 px-4 py-3 text-sm font-semibold text-fog-100">
+              {goalNotice}
+            </div>
+          ) : null}
         </form>
       </div>
 
@@ -1149,6 +1281,50 @@ function SummaryModule({
           )}
         </div>
       </div>
+      {isInterventionOpen ? (
+        <InterventionAnalysisDialog
+          title="Müdahale analizi"
+          text={interventionAnalysis}
+          onClose={() => setIsInterventionOpen(false)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function InterventionAnalysisDialog({
+  title,
+  text,
+  onClose
+}: {
+  title: string;
+  text: string;
+  onClose: () => void;
+}) {
+  const paragraphs = text
+    .split(/\n+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  return (
+    <div className="fixed inset-0 z-[75] flex items-center justify-center bg-carbon-950/75 p-4 backdrop-blur-md">
+      <div className="max-h-[86vh] w-full max-w-2xl overflow-auto rounded-lg border border-white/10 bg-carbon-900 p-5 shadow-glow">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-[0.16em] text-ember">AI müdahale önerisi</p>
+            <h3 className="mt-2 text-2xl font-black text-white">{title}</h3>
+          </div>
+          <button className="button-ghost px-3" type="button" onClick={onClose} aria-label="Popup kapat">
+            <X className="size-4" />
+          </button>
+        </div>
+        <div className="mt-5 grid gap-3 text-sm leading-7 text-fog-200">
+          {paragraphs.length > 0 ? paragraphs.map((paragraph) => <p key={paragraph}>{paragraph}</p>) : <p>Analiz hazırlanıyor...</p>}
+        </div>
+        <div className="mt-5 rounded-lg border border-ember/25 bg-ember/10 p-4 text-sm leading-7 text-fog-200">
+          Meta üzerinde işlem yapmadan önce kampanya hedefi, bütçe ve kreatif notlarını kontrol edin. Panel, uygulama adımından önce ayrıca onay ister.
+        </div>
+      </div>
     </div>
   );
 }
@@ -1170,12 +1346,69 @@ function CampaignTableModule({
   const [detail, setDetail] = useState<MetaCampaignDetailData | null>(null);
   const [detailError, setDetailError] = useState("");
   const [isDetailLoading, setIsDetailLoading] = useState(false);
+  const [statusExplanation, setStatusExplanation] = useState<MetaCampaignInsight | null>(null);
+  const [filters, setFilters] = useState({
+    search: "",
+    status: "all",
+    delivery: "all",
+    type: "all",
+    minSpend: "",
+    maxSpend: "",
+    sortBy: "spend_desc"
+  });
   const [pendingAction, setPendingAction] = useState<{
     action: "update_campaign_status";
     entityId: string;
     entityName: string;
     status: "ACTIVE" | "PAUSED";
   } | null>(null);
+  const campaignTypes = useMemo(() => {
+    const unique = new Map<string, string>();
+    data.campaigns.forEach((campaign) => {
+      unique.set(campaign.campaignType, campaign.campaignTypeLabel || campaign.campaignType);
+    });
+    return Array.from(unique.entries());
+  }, [data.campaigns]);
+  const filteredCampaigns = useMemo(() => {
+    const minSpend = filters.minSpend ? Number(filters.minSpend) : undefined;
+    const maxSpend = filters.maxSpend ? Number(filters.maxSpend) : undefined;
+    const search = filters.search.trim().toLocaleLowerCase("tr-TR");
+
+    return data.campaigns
+      .filter((campaign) => {
+        const matchesSearch =
+          !search ||
+          campaign.campaignName.toLocaleLowerCase("tr-TR").includes(search) ||
+          (campaign.objective || "").toLocaleLowerCase("tr-TR").includes(search);
+        const matchesStatus = filters.status === "all" || campaign.status === filters.status;
+        const active = isCampaignDeliveryActive(campaign);
+        const matchesDelivery =
+          filters.delivery === "all" ||
+          (filters.delivery === "active" && active) ||
+          (filters.delivery === "paused" && !active);
+        const matchesType = filters.type === "all" || campaign.campaignType === filters.type;
+        const matchesMinSpend = minSpend === undefined || campaign.spend >= minSpend;
+        const matchesMaxSpend = maxSpend === undefined || campaign.spend <= maxSpend;
+
+        return matchesSearch && matchesStatus && matchesDelivery && matchesType && matchesMinSpend && matchesMaxSpend;
+      })
+      .sort((a, b) => {
+        switch (filters.sortBy) {
+          case "spend_asc":
+            return a.spend - b.spend;
+          case "results_desc":
+            return b.results - a.results;
+          case "ctr_desc":
+            return b.ctr - a.ctr;
+          case "cpc_desc":
+            return b.cpc - a.cpc;
+          case "roas_desc":
+            return b.roas - a.roas;
+          default:
+            return b.spend - a.spend;
+        }
+      });
+  }, [data.campaigns, filters]);
 
   async function loadCampaignDetail(campaign: MetaCampaignInsight) {
     const nextOpen = openCampaignId === campaign.campaignId ? "" : campaign.campaignId;
@@ -1267,26 +1500,135 @@ function CampaignTableModule({
           {data.account.name || "Bağlı reklam hesabı"} için canlı kampanya insight verilerini karşılaştırın.
         </p>
       </div>
+      <div className="grid gap-3 border-b border-white/10 bg-carbon-950/45 p-4 md:grid-cols-2 xl:grid-cols-7">
+        <label className="grid gap-2 text-xs font-bold uppercase tracking-[0.1em] text-fog-400 xl:col-span-2">
+          Kampanya ara
+          <input
+            value={filters.search}
+            onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))}
+            className="min-h-11 min-w-0 rounded-lg border border-white/10 bg-carbon-950 px-3 py-2 text-sm normal-case tracking-normal text-white placeholder:text-fog-500"
+            placeholder="Ad veya objective"
+          />
+        </label>
+        <label className="grid gap-2 text-xs font-bold uppercase tracking-[0.1em] text-fog-400">
+          Panel durumu
+          <select
+            value={filters.status}
+            onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value }))}
+            className="min-h-11 min-w-0 rounded-lg border border-white/10 bg-carbon-950 px-3 py-2 text-sm normal-case tracking-normal text-white"
+          >
+            <option value="all">Tümü</option>
+            <option value="Güçlü">Güçlü</option>
+            <option value="İncele">İncele</option>
+            <option value="Riskli">Riskli</option>
+          </select>
+        </label>
+        <label className="grid gap-2 text-xs font-bold uppercase tracking-[0.1em] text-fog-400">
+          Yayın durumu
+          <select
+            value={filters.delivery}
+            onChange={(event) => setFilters((current) => ({ ...current, delivery: event.target.value }))}
+            className="min-h-11 min-w-0 rounded-lg border border-white/10 bg-carbon-950 px-3 py-2 text-sm normal-case tracking-normal text-white"
+          >
+            <option value="all">Tümü</option>
+            <option value="active">Açık / aktif</option>
+            <option value="paused">Kapalı / pasif</option>
+          </select>
+        </label>
+        <label className="grid gap-2 text-xs font-bold uppercase tracking-[0.1em] text-fog-400">
+          Reklam türü
+          <select
+            value={filters.type}
+            onChange={(event) => setFilters((current) => ({ ...current, type: event.target.value }))}
+            className="min-h-11 min-w-0 rounded-lg border border-white/10 bg-carbon-950 px-3 py-2 text-sm normal-case tracking-normal text-white"
+          >
+            <option value="all">Tümü</option>
+            {campaignTypes.map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="grid gap-2 text-xs font-bold uppercase tracking-[0.1em] text-fog-400">
+          Sıralama
+          <select
+            value={filters.sortBy}
+            onChange={(event) => setFilters((current) => ({ ...current, sortBy: event.target.value }))}
+            className="min-h-11 min-w-0 rounded-lg border border-white/10 bg-carbon-950 px-3 py-2 text-sm normal-case tracking-normal text-white"
+          >
+            <option value="spend_desc">Harcama yüksek</option>
+            <option value="spend_asc">Harcama düşük</option>
+            <option value="results_desc">Sonuç yüksek</option>
+            <option value="ctr_desc">CTR yüksek</option>
+            <option value="cpc_desc">CPC yüksek</option>
+            <option value="roas_desc">ROAS yüksek</option>
+          </select>
+        </label>
+        <div className="grid gap-3 sm:grid-cols-2 xl:col-span-7">
+          <label className="grid gap-2 text-xs font-bold uppercase tracking-[0.1em] text-fog-400">
+            Min. harcama
+            <input
+              value={filters.minSpend}
+              onChange={(event) => setFilters((current) => ({ ...current, minSpend: event.target.value }))}
+              type="number"
+              min="0"
+              className="min-h-11 min-w-0 rounded-lg border border-white/10 bg-carbon-950 px-3 py-2 text-sm normal-case tracking-normal text-white"
+            />
+          </label>
+          <label className="grid gap-2 text-xs font-bold uppercase tracking-[0.1em] text-fog-400">
+            Maks. harcama
+            <input
+              value={filters.maxSpend}
+              onChange={(event) => setFilters((current) => ({ ...current, maxSpend: event.target.value }))}
+              type="number"
+              min="0"
+              className="min-h-11 min-w-0 rounded-lg border border-white/10 bg-carbon-950 px-3 py-2 text-sm normal-case tracking-normal text-white"
+            />
+          </label>
+        </div>
+        <div className="flex items-end xl:col-span-7">
+          <button
+            className="button-ghost px-4"
+            type="button"
+            onClick={() =>
+              setFilters({
+                search: "",
+                status: "all",
+                delivery: "all",
+                type: "all",
+                minSpend: "",
+                maxSpend: "",
+                sortBy: "spend_desc"
+              })
+            }
+          >
+            Filtreleri Temizle
+            <X className="size-4" />
+          </button>
+        </div>
+      </div>
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[980px] text-left text-sm">
+        <table className="w-full min-w-[1120px] text-left text-sm">
           <thead className="bg-white/[0.04] text-xs uppercase tracking-[0.12em] text-fog-500">
             <tr>
               <th className="px-5 py-4">Kampanya</th>
+              <th className="px-5 py-4">Tür</th>
               <th className="px-5 py-4">Harcama</th>
               <th className="px-5 py-4">Gösterim</th>
               <th className="px-5 py-4">Tıklama</th>
               <th className="px-5 py-4">CTR</th>
               <th className="px-5 py-4">CPC</th>
               <th className="px-5 py-4">CPM</th>
-              <th className="px-5 py-4">Sonuç</th>
+              <th className="px-5 py-4">Hedef sonuç</th>
               <th className="px-5 py-4">ROAS</th>
               <th className="px-5 py-4">Durum</th>
               <th className="px-5 py-4">Aksiyon</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-white/10 text-fog-300">
-            {data.campaigns.length > 0 ? (
-              data.campaigns.map((campaign) => (
+            {filteredCampaigns.length > 0 ? (
+              filteredCampaigns.map((campaign) => (
                 <Fragment key={campaign.campaignId}>
                   <tr>
                     <td className="px-5 py-4">
@@ -1295,18 +1637,30 @@ function CampaignTableModule({
                         {campaign.deliveryStatus || "status yok"} {campaign.objective ? `• ${campaign.objective}` : ""}
                       </p>
                     </td>
+                    <td className="px-5 py-4">
+                      <span className="rounded-lg border border-white/10 bg-white/[0.04] px-3 py-1 text-xs font-bold text-fog-200">
+                        {campaign.campaignTypeLabel || "Diğer"}
+                      </span>
+                    </td>
                     <td className="px-5 py-4">{formatCurrency(campaign.spend, data.summary.currency)}</td>
                     <td className="px-5 py-4">{formatNumber(campaign.impressions)}</td>
                     <td className="px-5 py-4">{formatNumber(campaign.clicks)}</td>
                     <td className="px-5 py-4">{formatPercent(campaign.ctr)}</td>
                     <td className="px-5 py-4">{formatCurrency(campaign.cpc, data.summary.currency)}</td>
                     <td className="px-5 py-4">{formatCurrency(campaign.cpm, data.summary.currency)}</td>
-                    <td className="px-5 py-4">{formatNumber(campaign.results)}</td>
-                    <td className="px-5 py-4">{formatRoas(campaign.roas)}</td>
                     <td className="px-5 py-4">
-                      <span className={`rounded-lg border px-3 py-1 text-xs font-bold ${campaignStatusClass[campaign.status]}`}>
+                      <p>{formatNumber(campaign.results)}</p>
+                      <p className="mt-1 text-xs text-fog-500">{campaign.primaryResultLabel || "Hedef sonuç"}</p>
+                    </td>
+                    <td className="px-5 py-4">{campaign.campaignType === "sales" ? formatRoas(campaign.roas) : "-"}</td>
+                    <td className="px-5 py-4">
+                      <button
+                        type="button"
+                        onClick={() => setStatusExplanation(campaign)}
+                        className={`rounded-lg border px-3 py-1 text-xs font-bold transition hover:bg-white/5 ${campaignStatusClass[campaign.status]}`}
+                      >
                         {campaign.status}
-                      </span>
+                      </button>
                     </td>
                     <td className="px-5 py-4">
                       <div className="flex flex-wrap gap-2">
@@ -1349,7 +1703,7 @@ function CampaignTableModule({
                   </tr>
                   {openCampaignId === campaign.campaignId ? (
                     <tr key={`${campaign.campaignId}-detail`}>
-                      <td colSpan={11} className="bg-carbon-950/70 px-5 py-5">
+                      <td colSpan={12} className="bg-carbon-950/70 px-5 py-5">
                         {isDetailLoading ? (
                           <p className="text-sm text-fog-400">Kampanya detayı yükleniyor...</p>
                         ) : detailError ? (
@@ -1382,14 +1736,21 @@ function CampaignTableModule({
               ))
             ) : (
               <tr>
-                <td className="px-5 py-8 text-center text-fog-400" colSpan={11}>
-                  Bu tarih aralığında kampanya insight verisi bulunamadı.
+                <td className="px-5 py-8 text-center text-fog-400" colSpan={12}>
+                  Seçili filtrelere göre kampanya bulunamadı.
                 </td>
               </tr>
             )}
           </tbody>
         </table>
       </div>
+      {statusExplanation ? (
+        <StatusExplanationDialog
+          campaign={statusExplanation}
+          currency={data.summary.currency}
+          onClose={() => setStatusExplanation(null)}
+        />
+      ) : null}
       {pendingAction ? (
         <ConfirmDialog
           title="Bu müdahaleyi uygulamak istediğine emin misin?"
@@ -1399,6 +1760,47 @@ function CampaignTableModule({
           onConfirm={() => void applyCampaignStatus()}
         />
       ) : null}
+    </div>
+  );
+}
+
+function StatusExplanationDialog({
+  campaign,
+  currency,
+  onClose
+}: {
+  campaign: MetaCampaignInsight;
+  currency?: string;
+  onClose: () => void;
+}) {
+  const notes = getCampaignStatusExplanation(campaign, currency);
+
+  return (
+    <div className="fixed inset-0 z-[75] flex items-center justify-center bg-carbon-950/75 p-4 backdrop-blur-md">
+      <div className="w-full max-w-xl rounded-lg border border-white/10 bg-carbon-900 p-5 shadow-glow">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-[0.16em] text-acid">Durum açıklaması</p>
+            <h3 className="mt-2 text-xl font-black text-white">{campaign.campaignName}</h3>
+            <p className="mt-2 text-sm text-fog-400">
+              {campaign.campaignTypeLabel} • {campaign.primaryResultLabel || "Hedef sonuç"}
+            </p>
+          </div>
+          <button className="button-ghost px-3" type="button" onClick={onClose} aria-label="Açıklamayı kapat">
+            <X className="size-4" />
+          </button>
+        </div>
+        <div className="mt-5 grid gap-3">
+          <span className={`w-fit rounded-lg border px-3 py-1 text-xs font-bold ${campaignStatusClass[campaign.status]}`}>
+            {campaign.status}
+          </span>
+          <div className="grid gap-2 text-sm leading-7 text-fog-200">
+            {notes.map((note) => (
+              <p key={note}>{note}</p>
+            ))}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1418,6 +1820,7 @@ function MiniInsightTable({
     ctr: number;
     cpc: number;
     results: number;
+    primaryResultLabel?: string;
     roas: number;
     deliveryStatus?: string;
   }>;
@@ -1451,7 +1854,10 @@ function MiniInsightTable({
                   <td className="px-4 py-3">{formatCurrency(row.spend, currency)}</td>
                   <td className="px-4 py-3">{formatPercent(row.ctr)}</td>
                   <td className="px-4 py-3">{formatCurrency(row.cpc, currency)}</td>
-                  <td className="px-4 py-3">{formatNumber(row.results)}</td>
+                  <td className="px-4 py-3">
+                    <p>{formatNumber(row.results)}</p>
+                    {row.primaryResultLabel ? <p className="mt-1 text-fog-500">{row.primaryResultLabel}</p> : null}
+                  </td>
                   <td className="px-4 py-3">{formatRoas(row.roas)}</td>
                 </tr>
               ))
