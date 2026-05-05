@@ -81,12 +81,30 @@ const datePresetLabel: Record<string, string> = {
 };
 
 const reportStorageKey = "aky-panel-optimization-reports";
+const goalsStorageKey = "aky-panel-customer-goals";
 
 type DateFilter = {
   datePreset: string;
   dateFrom: string;
   dateTo: string;
 };
+
+type CustomerGoals = {
+  monthlyBudget: number;
+  targetResults: number;
+  maxCostPerResult: number;
+};
+
+const defaultCustomerGoals: CustomerGoals = {
+  monthlyBudget: 50000,
+  targetResults: 100,
+  maxCostPerResult: 500
+};
+
+function readGoalNumber(value: unknown, fallback: number) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric >= 0 ? numeric : fallback;
+}
 
 function formatNumber(value: number, fractionDigits = 0) {
   return new Intl.NumberFormat("tr-TR", {
@@ -109,6 +127,65 @@ function formatPercent(value: number) {
 
 function formatRoas(value: number) {
   return `${formatNumber(value, 2)}x`;
+}
+
+function getCostPerResult(data: MetaInsightsData) {
+  if (data.summary.results > 0) {
+    return data.summary.spend / data.summary.results;
+  }
+
+  return data.summary.spend;
+}
+
+function countRiskSignals(data: MetaInsightsData) {
+  return data.campaigns.filter((campaign) => {
+    const lowCtr = campaign.ctr > 0 && campaign.ctr < 1;
+    const noResultSpend = campaign.spend > 0 && campaign.results <= 0;
+    const weakRoas = campaign.roas > 0 && campaign.roas < 1.5;
+    return campaign.status === "Riskli" || lowCtr || noResultSpend || weakRoas;
+  }).length;
+}
+
+function buildCustomerHealth(data: MetaInsightsData, goals: CustomerGoals) {
+  const costPerResult = getCostPerResult(data);
+  const budgetUsage = goals.monthlyBudget > 0 ? data.summary.spend / goals.monthlyBudget : 0;
+  const resultProgress = goals.targetResults > 0 ? data.summary.results / goals.targetResults : 0;
+  const costTargetMet = goals.maxCostPerResult <= 0 || costPerResult <= goals.maxCostPerResult;
+  const riskSignals = countRiskSignals(data);
+  let score = 55;
+
+  score += Math.min(25, resultProgress * 25);
+  score += budgetUsage <= 1 ? 12 : -12;
+  score += costTargetMet ? 13 : -13;
+  score -= Math.min(24, riskSignals * 6);
+
+  const boundedScore = Math.max(0, Math.min(100, Math.round(score)));
+  const label = boundedScore >= 75 ? "İyi gidiyor" : boundedScore >= 50 ? "Takipte" : "Müdahale gerekiyor";
+  const tone = boundedScore >= 75 ? "acid" : boundedScore >= 50 ? "electric" : "ember";
+  const message =
+    boundedScore >= 75
+      ? "Hesap hedeflere yakın veya hedefin üzerinde ilerliyor."
+      : boundedScore >= 50
+        ? "Performans izlenebilir seviyede; birkaç nokta düzenli takip istiyor."
+        : "Maliyet, sonuç veya risk sinyalleri nedeniyle aksiyon almak gerekiyor.";
+
+  return {
+    score: boundedScore,
+    label,
+    tone,
+    message,
+    budgetUsage,
+    resultProgress,
+    costPerResult,
+    riskSignals
+  };
+}
+
+function getCustomerActionLabel(action: MetaOptimizationAction) {
+  if (action.executable) return "Kampanyayı Durdur";
+  if (action.type === "scale_campaign_note") return "Büyütme Planı Kaydet";
+  if (action.type === "refresh_creative_note") return "Kreatif İsteği Kaydet";
+  return "Kontrol Notu Kaydet";
 }
 
 function createReport(input: Omit<MetaActionReport, "id" | "createdAt">): MetaActionReport {
@@ -297,6 +374,7 @@ export function PanelWorkspace() {
     dateFrom: "",
     dateTo: ""
   });
+  const [customerGoals, setCustomerGoals] = useState<CustomerGoals>(defaultCustomerGoals);
   const [reports, setReports] = useState<MetaActionReport[]>([]);
   const [aiTaskLabel, setAiTaskLabel] = useState("");
   const [isLoadingData, setIsLoadingData] = useState(false);
@@ -316,12 +394,33 @@ export function PanelWorkspace() {
     }
   }, []);
 
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(goalsStorageKey);
+      if (!stored) return;
+
+      const parsed = JSON.parse(stored) as Partial<CustomerGoals>;
+      setCustomerGoals({
+        monthlyBudget: readGoalNumber(parsed.monthlyBudget, defaultCustomerGoals.monthlyBudget),
+        targetResults: readGoalNumber(parsed.targetResults, defaultCustomerGoals.targetResults),
+        maxCostPerResult: readGoalNumber(parsed.maxCostPerResult, defaultCustomerGoals.maxCostPerResult)
+      });
+    } catch {
+      setCustomerGoals(defaultCustomerGoals);
+    }
+  }, []);
+
   function saveReport(report: MetaActionReport) {
     setReports((current) => {
       const next = [report, ...current].slice(0, 30);
       window.localStorage.setItem(reportStorageKey, JSON.stringify(next));
       return next;
     });
+  }
+
+  function saveCustomerGoals(nextGoals: CustomerGoals) {
+    setCustomerGoals(nextGoals);
+    window.localStorage.setItem(goalsStorageKey, JSON.stringify(nextGoals));
   }
 
   function runAiTask<T>(label: string, task: () => Promise<T>) {
@@ -510,12 +609,14 @@ export function PanelWorkspace() {
               connection={connection}
               data={metaData}
               dateFilter={dateFilter}
+              customerGoals={customerGoals}
               reports={reports}
               isLoadingData={isLoadingData}
               dataError={dataError}
               onConnected={handleConnected}
               onDisconnected={handleDisconnect}
               onDateChange={handleDateChange}
+              onCustomerGoalsChange={saveCustomerGoals}
               onReport={saveReport}
               onRefresh={() => void refreshMetaData()}
               runAiTask={runAiTask}
@@ -546,12 +647,14 @@ type ActivePanelModuleProps = {
   connection: MetaConnectionState | null;
   data: MetaInsightsData | null;
   dateFilter: DateFilter;
+  customerGoals: CustomerGoals;
   reports: MetaActionReport[];
   isLoadingData: boolean;
   dataError: string;
   onConnected: (connection: MetaConnectionState) => void;
   onDisconnected: () => void;
   onDateChange: (filter: DateFilter) => void;
+  onCustomerGoalsChange: (goals: CustomerGoals) => void;
   onReport: (report: MetaActionReport) => void;
   onRefresh: () => void;
   runAiTask: <T>(label: string, task: () => Promise<T>) => Promise<T>;
@@ -562,12 +665,14 @@ function ActivePanelModule({
   connection,
   data,
   dateFilter,
+  customerGoals,
   reports,
   isLoadingData,
   dataError,
   onConnected,
   onDisconnected,
   onDateChange,
+  onCustomerGoalsChange,
   onReport,
   onRefresh,
   runAiTask
@@ -608,9 +713,11 @@ function ActivePanelModule({
         <SummaryModule
           data={data}
           dateFilter={dateFilter}
+          customerGoals={customerGoals}
           isLoadingData={isLoadingData}
           dataError={dataError}
           onDateChange={onDateChange}
+          onCustomerGoalsChange={onCustomerGoalsChange}
           onRefresh={onRefresh}
         />
       );
@@ -752,16 +859,20 @@ function AiProgressOverlay({ label }: { label: string }) {
 function SummaryModule({
   data,
   dateFilter,
+  customerGoals,
   isLoadingData,
   dataError,
   onDateChange,
+  onCustomerGoalsChange,
   onRefresh
 }: {
   data: MetaInsightsData;
   dateFilter: DateFilter;
+  customerGoals: CustomerGoals;
   isLoadingData: boolean;
   dataError: string;
   onDateChange: (filter: DateFilter) => void;
+  onCustomerGoalsChange: (goals: CustomerGoals) => void;
   onRefresh: () => void;
 }) {
   const metrics = [
@@ -808,6 +919,26 @@ function SummaryModule({
       return items;
     })
     .slice(0, 6);
+  const health = buildCustomerHealth(data, customerGoals);
+  const healthToneClass =
+    health.tone === "acid"
+      ? "border-acid/30 bg-acid/10 text-acid"
+      : health.tone === "electric"
+        ? "border-electric/30 bg-electric/10 text-electric"
+        : "border-ember/30 bg-ember/10 text-ember";
+  const customerSummary = [
+    `Bu dönemde ${formatCurrency(data.summary.spend, data.summary.currency)} harcandı ve ${formatNumber(data.summary.results)} sonuç alındı.`,
+    `Sonuç başı maliyet ${formatCurrency(health.costPerResult, data.summary.currency)}; hedef ${formatCurrency(
+      customerGoals.maxCostPerResult,
+      data.summary.currency
+    )}.`,
+    `Bütçe kullanımı yaklaşık %${formatNumber(health.budgetUsage * 100, 0)}, sonuç hedefi ilerlemesi %${formatNumber(
+      health.resultProgress * 100,
+      0
+    )}.`,
+    topRoas ? `En iyi çalışan kampanya ${topRoas.campaignName}; ROAS ${formatRoas(topRoas.roas)}.` : "",
+    alerts[0] ? `İlk bakılacak konu: ${alerts[0]}.` : "Şu an kritik bir uyarı görünmüyor; düzenli takip yeterli."
+  ].filter(Boolean);
 
   function handleDateSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -816,6 +947,16 @@ function SummaryModule({
       datePreset: String(form.get("datePreset") || "last_30d"),
       dateFrom: String(form.get("dateFrom") || ""),
       dateTo: String(form.get("dateTo") || "")
+    });
+  }
+
+  function handleGoalsSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    onCustomerGoalsChange({
+      monthlyBudget: Math.max(0, Number(form.get("monthlyBudget")) || 0),
+      targetResults: Math.max(0, Number(form.get("targetResults")) || 0),
+      maxCostPerResult: Math.max(0, Number(form.get("maxCostPerResult")) || 0)
     });
   }
 
@@ -851,6 +992,93 @@ function SummaryModule({
         <strong className="text-white">{data.account.name || data.account.id || "Meta reklam hesabı"}</strong>{" "}
         için {datePresetLabel[data.datePreset] || data.datePreset} verisi. Son çekim:{" "}
         {new Date(data.fetchedAt).toLocaleString("tr-TR")}.
+      </div>
+
+      <div className="mt-5 grid gap-4 xl:grid-cols-[0.95fr_1.05fr]">
+        <div className="rounded-lg border border-white/10 bg-carbon-950 p-5">
+          <div className="flex flex-col gap-5 sm:flex-row sm:items-center">
+            <div
+              className="flex size-32 shrink-0 items-center justify-center rounded-full p-2"
+              style={{
+                background: `conic-gradient(#b7ff3c ${health.score * 3.6}deg, rgba(255,255,255,0.08) 0deg)`
+              }}
+            >
+              <div className="flex size-full items-center justify-center rounded-full bg-carbon-950 text-3xl font-black text-white">
+                {health.score}
+              </div>
+            </div>
+            <div>
+              <span className={`inline-flex rounded-lg border px-3 py-2 text-xs font-black uppercase tracking-[0.12em] ${healthToneClass}`}>
+                {health.label}
+              </span>
+              <h3 className="mt-4 text-xl font-black text-white">Reklam durumu</h3>
+              <p className="mt-2 text-sm leading-7 text-fog-300">{health.message}</p>
+              <p className="mt-2 text-xs font-semibold text-fog-500">
+                {health.riskSignals} kampanya risk sinyali, {formatNumber(data.summary.results)} toplam sonuç.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <form className="rounded-lg border border-white/10 bg-carbon-950 p-5" onSubmit={handleGoalsSubmit}>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-[0.14em] text-acid">Müşteri hedefleri</p>
+              <h3 className="mt-2 text-xl font-black text-white">Hedefe göre takip</h3>
+            </div>
+            <button className="button-secondary px-4" type="submit">
+              Kaydet
+              <CheckCircle2 className="size-4" />
+            </button>
+          </div>
+          <div className="mt-4 grid gap-3 sm:grid-cols-3">
+            <label className="grid gap-2 text-xs font-bold uppercase tracking-[0.12em] text-fog-400">
+              Aylık bütçe
+              <input
+                name="monthlyBudget"
+                type="number"
+                min="0"
+                step="100"
+                defaultValue={customerGoals.monthlyBudget}
+                className="min-h-11 rounded-lg border border-white/10 bg-carbon-900 px-3 py-2 text-sm text-white"
+              />
+            </label>
+            <label className="grid gap-2 text-xs font-bold uppercase tracking-[0.12em] text-fog-400">
+              Sonuç hedefi
+              <input
+                name="targetResults"
+                type="number"
+                min="0"
+                step="1"
+                defaultValue={customerGoals.targetResults}
+                className="min-h-11 rounded-lg border border-white/10 bg-carbon-900 px-3 py-2 text-sm text-white"
+              />
+            </label>
+            <label className="grid gap-2 text-xs font-bold uppercase tracking-[0.12em] text-fog-400">
+              Maks. sonuç maliyeti
+              <input
+                name="maxCostPerResult"
+                type="number"
+                min="0"
+                step="10"
+                defaultValue={customerGoals.maxCostPerResult}
+                className="min-h-11 rounded-lg border border-white/10 bg-carbon-900 px-3 py-2 text-sm text-white"
+              />
+            </label>
+          </div>
+        </form>
+      </div>
+
+      <div className="mt-5 rounded-lg border border-white/10 bg-white/[0.035] p-4">
+        <div className="flex items-center gap-3">
+          <FileText className="size-5 text-acid" />
+          <h3 className="text-lg font-black text-white">Müşteri özeti</h3>
+        </div>
+        <div className="mt-4 grid gap-2 text-sm leading-7 text-fog-300">
+          {customerSummary.map((item) => (
+            <p key={item}>{item}</p>
+          ))}
+        </div>
       </div>
 
       <form className="mt-5 grid gap-4 rounded-lg border border-white/10 bg-carbon-950/60 p-4 lg:grid-cols-[1fr_1fr_1fr_auto]" onSubmit={handleDateSubmit}>
@@ -1942,6 +2170,8 @@ export function OptimizationCenter({
   const actions = buildOptimizationActions(data.campaigns);
   const [pendingAction, setPendingAction] = useState<MetaOptimizationAction | null>(null);
   const [aiNotes, setAiNotes] = useState("");
+  const directActions = actions.filter((action) => action.executable).length;
+  const noteActions = actions.length - directActions;
 
   async function generateOptimizationPlan() {
     await runAiTask("AI optimizasyon önerileri canlı reklam verisine göre hazırlanıyor.", async () => {
@@ -2030,19 +2260,34 @@ export function OptimizationCenter({
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <p className="text-xs font-bold uppercase tracking-[0.16em] text-acid">Optimizasyon merkezi</p>
-          <h2 className="mt-2 text-2xl font-black text-white">Öncelikli aksiyonlar</h2>
+          <h2 className="mt-2 text-2xl font-black text-white">Müşteri aksiyon merkezi</h2>
           <p className="mt-3 text-sm leading-7 text-fog-400">
-            Canlı Meta verisine göre riskli, izlenecek ve ölçeklenecek kampanyaları önceliklendirin.
+            Canlı Meta verisine göre neyin güvenle yapılabileceğini, neyin sadece not olarak takip edilmesi gerektiğini sade şekilde görün.
           </p>
         </div>
-        <button className="button-secondary" type="button" onClick={onRefresh}>
-          Veriyi Yenile
-          <RefreshCw className="size-4" />
-        </button>
-        <button className="button-primary" type="button" onClick={() => void generateOptimizationPlan()}>
-          AI Plan Üret
-          <Sparkles className="size-4" />
-        </button>
+        <div className="flex flex-col gap-3 sm:flex-row">
+          <button className="button-secondary" type="button" onClick={onRefresh}>
+            Veriyi Yenile
+            <RefreshCw className="size-4" />
+          </button>
+          <button className="button-primary" type="button" onClick={() => void generateOptimizationPlan()}>
+            AI Plan Üret
+            <Sparkles className="size-4" />
+          </button>
+        </div>
+      </div>
+      <div className="mt-5 grid gap-3 sm:grid-cols-3">
+        {[
+          { label: "Uygulanabilir işlem", value: directActions, helper: "Onaydan sonra Meta'ya gider" },
+          { label: "Takip notu", value: noteActions, helper: "Raporlara kaydedilir" },
+          { label: "Kayıtlı rapor", value: reports.length, helper: "Son işlemler görünür" }
+        ].map((item) => (
+          <div key={item.label} className="rounded-lg border border-white/10 bg-carbon-950 p-4">
+            <p className="text-xs font-bold uppercase tracking-[0.12em] text-fog-500">{item.label}</p>
+            <h3 className="mt-2 text-2xl font-black text-white">{formatNumber(item.value)}</h3>
+            <p className="mt-1 text-sm text-fog-400">{item.helper}</p>
+          </div>
+        ))}
       </div>
       {aiNotes ? (
         <div className="mt-5 rounded-lg border border-electric/25 bg-electric/10 p-4 text-sm leading-7 text-fog-200">
@@ -2053,6 +2298,7 @@ export function OptimizationCenter({
         {actions.length > 0 ? (
           actions.map((action) => {
             const Icon = action.executable ? PauseCircle : FileText;
+            const actionLabel = getCustomerActionLabel(action);
             return (
               <div key={action.id} className="rounded-lg border border-white/10 bg-carbon-950 p-4">
                 <Icon className={`size-5 ${action.executable ? "text-ember" : "text-acid"}`} />
@@ -2061,7 +2307,7 @@ export function OptimizationCenter({
                 <p className="mt-2 text-sm leading-7 text-fog-400">{action.reason}</p>
                 <p className="mt-2 text-sm leading-7 text-fog-300">{action.impact}</p>
                 <button className="button-secondary mt-4 w-full" type="button" onClick={() => setPendingAction(action)}>
-                  {action.executable ? "Uygula" : "Raporlara Kaydet"}
+                  {actionLabel}
                 </button>
               </div>
             );
@@ -2074,8 +2320,8 @@ export function OptimizationCenter({
         )}
       </div>
       <div className="mt-5 rounded-lg border border-ember/25 bg-ember/10 p-4 text-sm leading-7 text-fog-200">
-        Bu ekran canlı veriden öneri üretir. Kampanya durdurma, bütçe değiştirme veya yayınlama gibi işlemler ayrıca
-        seçmeli onay adımıyla bağlanmalıdır.
+        Bu ekran müşterinin yanlışlıkla işlem yapmasını engellemek için Meta üzerinde değişiklikten önce mutlaka onay ister.
+        Uygulanamayan öneriler işlem geçmişine not olarak kaydedilir.
       </div>
       <div className="mt-6 rounded-lg border border-white/10 bg-carbon-950/60 p-4">
         <div className="flex items-center gap-3">
