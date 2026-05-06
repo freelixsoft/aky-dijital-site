@@ -16,7 +16,30 @@ export type SubscriptionState = {
   expiresAt: string;
 };
 
+export type CustomerMembership = {
+  fullName: string;
+  email: string;
+  phone: string;
+  companyName: string;
+  website: string;
+  sector: string;
+  taxTitle: string;
+  city: string;
+  monthlyAdBudget: string;
+  target: string;
+  selectedPlanId: SubscriptionPlanId;
+  createdAt: string;
+  status: "active";
+};
+
+export type CustomerSession = {
+  email: string;
+  loggedInAt: string;
+};
+
 export const subscriptionStorageKey = "aky-panel-subscription";
+export const membershipStorageKey = "aky-panel-membership";
+export const memberSessionStorageKey = "aky-panel-member-session";
 export const subscriptionCycleDays = 30;
 
 export const subscriptionPlans: SubscriptionPlan[] = [

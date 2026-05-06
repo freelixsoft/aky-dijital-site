@@ -48,7 +48,11 @@ import type {
 } from "@/lib/meta";
 import {
   getSubscriptionPlan,
+  memberSessionStorageKey,
+  membershipStorageKey,
   subscriptionStorageKey,
+  type CustomerMembership,
+  type CustomerSession,
   type SubscriptionState
 } from "@/lib/subscription";
 
@@ -498,6 +502,8 @@ export function PanelWorkspace() {
   const [reports, setReports] = useState<MetaActionReport[]>([]);
   const [aiTaskLabel, setAiTaskLabel] = useState("");
   const [subscription, setSubscription] = useState<SubscriptionState | null>(null);
+  const [membership, setMembership] = useState<CustomerMembership | null>(null);
+  const [memberSession, setMemberSession] = useState<CustomerSession | null>(null);
   const [isSubscriptionReady, setIsSubscriptionReady] = useState(false);
   const [subscriptionNow, setSubscriptionNow] = useState(Date.now());
   const [isLoadingData, setIsLoadingData] = useState(false);
@@ -520,9 +526,15 @@ export function PanelWorkspace() {
   useEffect(() => {
     try {
       const stored = window.localStorage.getItem(subscriptionStorageKey);
+      const storedMembership = window.localStorage.getItem(membershipStorageKey);
+      const storedSession = window.sessionStorage.getItem(memberSessionStorageKey);
       setSubscription(stored ? (JSON.parse(stored) as SubscriptionState) : null);
+      setMembership(storedMembership ? (JSON.parse(storedMembership) as CustomerMembership) : null);
+      setMemberSession(storedSession ? (JSON.parse(storedSession) as CustomerSession) : null);
     } catch {
       setSubscription(null);
+      setMembership(null);
+      setMemberSession(null);
     } finally {
       setIsSubscriptionReady(true);
     }
@@ -662,9 +674,18 @@ export function PanelWorkspace() {
     return <SubscriptionRequiredNotice subscription={subscription} />;
   }
 
+  if (!membership || !memberSession || memberSession.email.toLowerCase() !== membership.email.toLowerCase()) {
+    return <LoginRequiredNotice membership={membership} />;
+  }
+
   return (
     <div id="panel-moduller" className="scroll-mt-28">
-      <SubscriptionStatusBanner planName={activePlan.name} countdown={countdown} adAccountLimit={activePlan.adAccountLimit} />
+      <SubscriptionStatusBanner
+        planName={activePlan.name}
+        countdown={countdown}
+        adAccountLimit={activePlan.adAccountLimit}
+        companyName={membership.companyName}
+      />
       <div className="mx-auto max-w-3xl text-center">
         <p className="eyebrow">Panel modülleri</p>
         <h2 className="mt-4 text-balance text-3xl font-black text-white sm:text-4xl">
@@ -977,18 +998,20 @@ function LiveDataState({
 function SubscriptionStatusBanner({
   planName,
   adAccountLimit,
-  countdown
+  countdown,
+  companyName
 }: {
   planName: string;
   adAccountLimit: number;
   countdown: { days: number; hours: number; minutes: number; totalMinutes: number };
+  companyName: string;
 }) {
   return (
     <div className="mb-8 rounded-lg border border-acid/25 bg-acid/10 p-4">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <p className="text-xs font-black uppercase tracking-[0.16em] text-acid">Abonelik aktif</p>
-          <h3 className="mt-2 text-xl font-black text-white">{planName} planı</h3>
+          <h3 className="mt-2 text-xl font-black text-white">{companyName} için {planName} planı</h3>
           <p className="mt-2 text-sm leading-7 text-fog-300">
             Bu plan {adAccountLimit} reklam hesabına kadar kullanım sağlar. Süre bittiğinde panel otomatik kilitlenir.
           </p>
@@ -1003,6 +1026,33 @@ function SubscriptionStatusBanner({
             <RefreshCw className="size-4" />
           </Link>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function LoginRequiredNotice({ membership }: { membership: CustomerMembership | null }) {
+  return (
+    <div className="mx-auto max-w-4xl rounded-lg border border-electric/25 bg-electric/10 p-5">
+      <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex items-start gap-4">
+          <span className="flex size-12 shrink-0 items-center justify-center rounded-lg border border-electric/25 bg-carbon-950 text-electric">
+            <LockKeyhole className="size-5" />
+          </span>
+          <div>
+            <p className="text-xs font-black uppercase tracking-[0.16em] text-electric">Üye girişi gerekli</p>
+            <h3 className="mt-2 text-2xl font-black text-white">Paneli kullanmak için giriş yapın.</h3>
+            <p className="mt-3 text-sm leading-7 text-fog-300">
+              {membership
+                ? `${membership.companyName} üyeliği aktif. Kayıtlı e-posta ile giriş yaptıktan sonra panel açılır.`
+                : "Aktif plan bulundu ama üyelik bilgisi bulunamadı. Lütfen abonelik sayfasından üyelik oluşturun."}
+            </p>
+          </div>
+        </div>
+        <Link href={membership ? "/panel/giris" : "/abonelik"} className="button-primary shrink-0 justify-center">
+          {membership ? "Giriş Yap" : "Üyelik Oluştur"}
+          <ChevronRight className="size-4" />
+        </Link>
       </div>
     </div>
   );
