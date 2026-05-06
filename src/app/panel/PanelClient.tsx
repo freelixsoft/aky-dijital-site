@@ -1,6 +1,7 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
+import Link from "next/link";
 import {
   AlertCircle,
   BarChart3,
@@ -40,10 +41,16 @@ import type {
   MetaCampaignDetailData,
   MetaCampaignInsight,
   MetaConnectionState,
+  MetaEntityInsight,
   MetaInsightsApiResponse,
   MetaInsightsData,
   MetaOptimizationAction
 } from "@/lib/meta";
+import {
+  getSubscriptionPlan,
+  subscriptionStorageKey,
+  type SubscriptionState
+} from "@/lib/subscription";
 
 const fallbackAnswer =
   "AI ön analizi: En güçlü alan remarketing ve Advantage+ kampanyaları. Soğuk kitle kreatif testinde CTR düşük ve CPC yüksek görünüyor. İlk aksiyon olarak düşük CTR kampanyada kreatif açısını yenileyin, remarketing bütçesini kontrollü artırın ve ROAS düşük kampanyalarda hedef kitleyi yeniden segmentleyin.";
@@ -89,6 +96,12 @@ type DateFilter = {
   dateTo: string;
 };
 
+type DetailEntityKind = "adset" | "ad";
+type DetailEntityRow = MetaEntityInsight & {
+  adsetId?: string;
+  adsetName?: string;
+};
+
 type CustomerGoals = {
   monthlyBudget: number;
   targetResults: number;
@@ -104,6 +117,16 @@ const defaultCustomerGoals: CustomerGoals = {
 function readGoalNumber(value: unknown, fallback: number) {
   const numeric = Number(value);
   return Number.isFinite(numeric) && numeric >= 0 ? numeric : fallback;
+}
+
+function getSubscriptionCountdown(expiresAt: string, now = Date.now()) {
+  const diff = Math.max(0, new Date(expiresAt).getTime() - now);
+  const totalMinutes = Math.floor(diff / (1000 * 60));
+  const days = Math.floor(totalMinutes / (60 * 24));
+  const hours = Math.floor((totalMinutes - days * 60 * 24) / 60);
+  const minutes = totalMinutes % 60;
+
+  return { days, hours, minutes, totalMinutes };
 }
 
 function formatNumber(value: number, fractionDigits = 0) {
@@ -222,6 +245,28 @@ function getCampaignStatusExplanation(campaign: MetaCampaignInsight, currency = 
       notes.push(`Satış kampanyasında ROAS ${formatRoas(campaign.roas)}; gelir tarafı zayıf.`);
     }
     notes.push("Bu kampanya için önce kreatif ve hedef kitle kontrolü, gerekirse durdurma önerilir.");
+  }
+
+  return notes;
+}
+
+function buildEntityEvaluation(row: DetailEntityRow, currency = "TRY") {
+  const resultLabel = row.primaryResultLabel || "hedef sonuç";
+  const costPerResult = row.results > 0 ? row.spend / row.results : 0;
+  const notes = [
+    `${formatCurrency(row.spend, currency)} harcama ile ${formatNumber(row.impressions)} gösterim ve ${formatNumber(row.clicks)} tıklama üretmiş.`,
+    `${formatNumber(row.results)} ${resultLabel.toLowerCase()} var${row.results > 0 ? `; sonuç başı maliyet ${formatCurrency(costPerResult, currency)}` : ""}.`,
+    `CTR ${formatPercent(row.ctr)}, CPC ${formatCurrency(row.cpc, currency)}, CPM ${formatCurrency(row.cpm, currency)}.`
+  ];
+
+  if (row.spend > 0 && row.results <= 0) {
+    notes.push("Harcama var ama hedef sonuç yok; kreatif, hedef kitle veya teklif mesajı kontrol edilmeli.");
+  } else if (row.ctr > 0 && row.ctr < 1) {
+    notes.push("CTR düşük görünüyor; ilk görsel/video ve başlık daha net fayda anlatmalı.");
+  } else if (row.results > 0 && row.ctr >= 1.5) {
+    notes.push("Bu satır çalışıyor; benzer kitle veya kreatif varyasyonla test edilebilir.");
+  } else {
+    notes.push("Net karar için birkaç gün daha veri biriktirip maliyet ve sonuç trendi izlenmeli.");
   }
 
   return notes;
@@ -452,6 +497,9 @@ export function PanelWorkspace() {
   const [customerGoals, setCustomerGoals] = useState<CustomerGoals>(defaultCustomerGoals);
   const [reports, setReports] = useState<MetaActionReport[]>([]);
   const [aiTaskLabel, setAiTaskLabel] = useState("");
+  const [subscription, setSubscription] = useState<SubscriptionState | null>(null);
+  const [isSubscriptionReady, setIsSubscriptionReady] = useState(false);
+  const [subscriptionNow, setSubscriptionNow] = useState(Date.now());
   const [isLoadingData, setIsLoadingData] = useState(false);
   const [dataError, setDataError] = useState("");
   const [gateMessage, setGateMessage] = useState("Önce Meta bağlantısını kurunuz. Bağlantı kurulunca diğer modüller canlı reklam verisiyle açılır.");
@@ -467,6 +515,22 @@ export function PanelWorkspace() {
     } catch {
       setReports([]);
     }
+  }, []);
+
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(subscriptionStorageKey);
+      setSubscription(stored ? (JSON.parse(stored) as SubscriptionState) : null);
+    } catch {
+      setSubscription(null);
+    } finally {
+      setIsSubscriptionReady(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setSubscriptionNow(Date.now()), 60 * 1000);
+    return () => window.clearInterval(timer);
   }, []);
 
   useEffect(() => {
@@ -488,6 +552,22 @@ export function PanelWorkspace() {
   function saveReport(report: MetaActionReport) {
     setReports((current) => {
       const next = [report, ...current].slice(0, 30);
+      window.localStorage.setItem(reportStorageKey, JSON.stringify(next));
+      return next;
+    });
+  }
+
+  function updateReport(reportId: string, patch: Partial<Pick<MetaActionReport, "title" | "message" | "details">>) {
+    setReports((current) => {
+      const next = current.map((report) => (report.id === reportId ? { ...report, ...patch } : report));
+      window.localStorage.setItem(reportStorageKey, JSON.stringify(next));
+      return next;
+    });
+  }
+
+  function deleteReport(reportId: string) {
+    setReports((current) => {
+      const next = current.filter((report) => report.id !== reportId);
       window.localStorage.setItem(reportStorageKey, JSON.stringify(next));
       return next;
     });
@@ -571,8 +651,20 @@ export function PanelWorkspace() {
     setActiveModule((current) => (current === module.id ? null : module.id));
   }
 
+  if (!isSubscriptionReady) {
+    return <LiveDataState title="Abonelik kontrol ediliyor" text="Panel erişimi için plan durumu kontrol ediliyor." />;
+  }
+
+  const activePlan = getSubscriptionPlan(subscription?.planId);
+  const countdown = subscription ? getSubscriptionCountdown(subscription.expiresAt, subscriptionNow) : null;
+
+  if (!activePlan || !countdown || countdown.totalMinutes <= 0) {
+    return <SubscriptionRequiredNotice subscription={subscription} />;
+  }
+
   return (
     <div id="panel-moduller" className="scroll-mt-28">
+      <SubscriptionStatusBanner planName={activePlan.name} countdown={countdown} adAccountLimit={activePlan.adAccountLimit} />
       <div className="mx-auto max-w-3xl text-center">
         <p className="eyebrow">Panel modülleri</p>
         <h2 className="mt-4 text-balance text-3xl font-black text-white sm:text-4xl">
@@ -693,6 +785,8 @@ export function PanelWorkspace() {
               onDateChange={handleDateChange}
               onCustomerGoalsChange={saveCustomerGoals}
               onReport={saveReport}
+              onReportUpdate={updateReport}
+              onReportDelete={deleteReport}
               onRefresh={() => void refreshMetaData()}
               runAiTask={runAiTask}
             />
@@ -731,6 +825,8 @@ type ActivePanelModuleProps = {
   onDateChange: (filter: DateFilter) => void;
   onCustomerGoalsChange: (goals: CustomerGoals) => void;
   onReport: (report: MetaActionReport) => void;
+  onReportUpdate: (reportId: string, patch: Partial<Pick<MetaActionReport, "title" | "message" | "details">>) => void;
+  onReportDelete: (reportId: string) => void;
   onRefresh: () => void;
   runAiTask: <T>(label: string, task: () => Promise<T>) => Promise<T>;
 };
@@ -749,6 +845,8 @@ function ActivePanelModule({
   onDateChange,
   onCustomerGoalsChange,
   onReport,
+  onReportUpdate,
+  onReportDelete,
   onRefresh,
   runAiTask
 }: ActivePanelModuleProps) {
@@ -811,6 +909,8 @@ function ActivePanelModule({
           reports={reports}
           onRefresh={onRefresh}
           onReport={onReport}
+          onReportUpdate={onReportUpdate}
+          onReportDelete={onReportDelete}
           runAiTask={runAiTask}
         />
       );
@@ -869,6 +969,70 @@ function LiveDataState({
             <RefreshCw className="size-4" />
           </button>
         ) : null}
+      </div>
+    </div>
+  );
+}
+
+function SubscriptionStatusBanner({
+  planName,
+  adAccountLimit,
+  countdown
+}: {
+  planName: string;
+  adAccountLimit: number;
+  countdown: { days: number; hours: number; minutes: number; totalMinutes: number };
+}) {
+  return (
+    <div className="mb-8 rounded-lg border border-acid/25 bg-acid/10 p-4">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <p className="text-xs font-black uppercase tracking-[0.16em] text-acid">Abonelik aktif</p>
+          <h3 className="mt-2 text-xl font-black text-white">{planName} planı</h3>
+          <p className="mt-2 text-sm leading-7 text-fog-300">
+            Bu plan {adAccountLimit} reklam hesabına kadar kullanım sağlar. Süre bittiğinde panel otomatik kilitlenir.
+          </p>
+        </div>
+        <div className="rounded-lg border border-white/10 bg-carbon-950 p-4 text-center">
+          <p className="text-xs font-bold uppercase tracking-[0.14em] text-fog-500">Kalan süre</p>
+          <p className="mt-2 text-2xl font-black text-white">
+            {countdown.days}g {countdown.hours}s {countdown.minutes}dk
+          </p>
+          <Link href="/abonelik" className="button-ghost mt-3 w-full justify-center">
+            Planı Yenile
+            <RefreshCw className="size-4" />
+          </Link>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SubscriptionRequiredNotice({ subscription }: { subscription: SubscriptionState | null }) {
+  const isExpired = Boolean(subscription);
+
+  return (
+    <div className="mx-auto max-w-4xl rounded-lg border border-ember/25 bg-ember/10 p-5">
+      <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex items-start gap-4">
+          <span className="flex size-12 shrink-0 items-center justify-center rounded-lg border border-ember/25 bg-carbon-950 text-ember">
+            <LockKeyhole className="size-5" />
+          </span>
+          <div>
+            <p className="text-xs font-black uppercase tracking-[0.16em] text-ember">
+              {isExpired ? "Abonelik süresi doldu" : "Abonelik gerekli"}
+            </p>
+            <h3 className="mt-2 text-2xl font-black text-white">Paneli kullanmak için aktif plan gerekir.</h3>
+            <p className="mt-3 text-sm leading-7 text-fog-300">
+              Her abonelik 30 gün geçerlidir. Plan yenilenmediğinde Meta bağlantısı, kampanya tablosu, AI analiz ve
+              optimizasyon modülleri kilitlenir.
+            </p>
+          </div>
+        </div>
+        <Link href="/abonelik" className="button-primary shrink-0 justify-center">
+          Abone Ol / Yenile
+          <ChevronRight className="size-4" />
+        </Link>
       </div>
     </div>
   );
@@ -1347,6 +1511,7 @@ function CampaignTableModule({
   const [detailError, setDetailError] = useState("");
   const [isDetailLoading, setIsDetailLoading] = useState(false);
   const [statusExplanation, setStatusExplanation] = useState<MetaCampaignInsight | null>(null);
+  const [selectedEntity, setSelectedEntity] = useState<{ kind: DetailEntityKind; row: DetailEntityRow } | null>(null);
   const [filters, setFilters] = useState({
     search: "",
     status: "all",
@@ -1415,6 +1580,7 @@ function CampaignTableModule({
     setOpenCampaignId(nextOpen);
     setDetail(null);
     setDetailError("");
+    setSelectedEntity(null);
 
     if (!nextOpen) return;
 
@@ -1500,7 +1666,7 @@ function CampaignTableModule({
           {data.account.name || "Bağlı reklam hesabı"} için canlı kampanya insight verilerini karşılaştırın.
         </p>
       </div>
-      <div className="grid gap-3 border-b border-white/10 bg-carbon-950/45 p-4 md:grid-cols-2 xl:grid-cols-7">
+      <div className="mx-auto grid max-w-5xl gap-3 border-b border-white/10 bg-carbon-950/45 p-4 md:grid-cols-2 xl:grid-cols-7">
         <label className="grid gap-2 text-xs font-bold uppercase tracking-[0.1em] text-fog-400 xl:col-span-2">
           Kampanya ara
           <input
@@ -1724,8 +1890,18 @@ function CampaignTableModule({
                               ))}
                             </div>
                             <div className="grid gap-4 xl:grid-cols-2">
-                              <MiniInsightTable title="Ad set detayları" rows={detail.adsets} currency={data.summary.currency} />
-                              <MiniInsightTable title="Reklam detayları" rows={detail.ads} currency={data.summary.currency} />
+                              <MiniInsightTable
+                                title="Ad set detayları"
+                                rows={detail.adsets}
+                                currency={data.summary.currency}
+                                onRowClick={(row) => setSelectedEntity({ kind: "adset", row })}
+                              />
+                              <MiniInsightTable
+                                title="Reklam detayları"
+                                rows={detail.ads}
+                                currency={data.summary.currency}
+                                onRowClick={(row) => setSelectedEntity({ kind: "ad", row })}
+                              />
                             </div>
                           </div>
                         ) : null}
@@ -1749,6 +1925,14 @@ function CampaignTableModule({
           campaign={statusExplanation}
           currency={data.summary.currency}
           onClose={() => setStatusExplanation(null)}
+        />
+      ) : null}
+      {selectedEntity ? (
+        <EntityInsightDialog
+          kind={selectedEntity.kind}
+          row={selectedEntity.row}
+          currency={data.summary.currency}
+          onClose={() => setSelectedEntity(null)}
         />
       ) : null}
       {pendingAction ? (
@@ -1805,26 +1989,96 @@ function StatusExplanationDialog({
   );
 }
 
+function EntityInsightDialog({
+  kind,
+  row,
+  currency,
+  onClose
+}: {
+  kind: DetailEntityKind;
+  row: DetailEntityRow;
+  currency?: string;
+  onClose: () => void;
+}) {
+  const notes = buildEntityEvaluation(row, currency);
+  const resultLabel = row.primaryResultLabel || "Hedef sonuç";
+  const title = kind === "adset" ? "Ad set değerlendirmesi" : "Reklam değerlendirmesi";
+  const previewUrl = row.previewUrl || row.imageUrl || row.thumbnailUrl;
+
+  return (
+    <div className="fixed inset-0 z-[75] flex items-center justify-center bg-carbon-950/75 p-4 backdrop-blur-md">
+      <div className="max-h-[88vh] w-full max-w-3xl overflow-auto rounded-lg border border-white/10 bg-carbon-900 p-5 shadow-glow">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-[0.16em] text-acid">{title}</p>
+            <h3 className="mt-2 text-xl font-black text-white">{row.name}</h3>
+            <p className="mt-2 text-sm text-fog-400">{row.deliveryStatus || row.id}</p>
+          </div>
+          <button className="button-ghost px-3" type="button" onClick={onClose} aria-label="Detayı kapat">
+            <X className="size-4" />
+          </button>
+        </div>
+
+        <div className="mt-5 grid gap-4 lg:grid-cols-[0.95fr_1.05fr]">
+          <div className="rounded-lg border border-white/10 bg-carbon-950 p-4">
+            <h4 className="text-base font-black text-white">Veri akışı</h4>
+            <div className="mt-4 grid gap-3 text-sm">
+              {[
+                { label: "Harcama", value: formatCurrency(row.spend, currency) },
+                { label: "Gösterim", value: formatNumber(row.impressions) },
+                { label: "Tıklama", value: formatNumber(row.clicks) },
+                { label: resultLabel, value: formatNumber(row.results) }
+              ].map((item) => (
+                <div key={item.label} className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-white/[0.035] px-3 py-2">
+                  <span className="text-fog-400">{item.label}</span>
+                  <strong className="text-white">{item.value}</strong>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-white/10 bg-carbon-950 p-4">
+            <h4 className="text-base font-black text-white">Durum yorumu</h4>
+            <div className="mt-4 grid gap-2 text-sm leading-7 text-fog-200">
+              {notes.map((note) => (
+                <p key={note}>{note}</p>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {kind === "ad" ? (
+          <div className="mt-5 overflow-hidden rounded-lg border border-white/10 bg-carbon-950">
+            <div className="border-b border-white/10 p-4">
+              <h4 className="text-base font-black text-white">Reklam önizleme</h4>
+              {row.creativeName ? <p className="mt-1 text-sm text-fog-400">{row.creativeName}</p> : null}
+            </div>
+            {previewUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={previewUrl} alt={`${row.name} reklam önizleme`} className="max-h-[420px] w-full object-contain" />
+            ) : (
+              <div className="grid min-h-52 place-items-center p-6 text-center text-sm leading-7 text-fog-400">
+                Meta bu reklam için görsel/video önizleme URL'i döndürmedi.
+                {row.videoId ? ` Video ID: ${row.videoId}` : ""}
+              </div>
+            )}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function MiniInsightTable({
   title,
   rows,
-  currency
+  currency,
+  onRowClick
 }: {
   title: string;
-  rows: Array<{
-    id: string;
-    name: string;
-    spend: number;
-    impressions: number;
-    clicks: number;
-    ctr: number;
-    cpc: number;
-    results: number;
-    primaryResultLabel?: string;
-    roas: number;
-    deliveryStatus?: string;
-  }>;
+  rows: DetailEntityRow[];
   currency?: string;
+  onRowClick?: (row: DetailEntityRow) => void;
 }) {
   return (
     <div className="overflow-hidden rounded-lg border border-white/10 bg-carbon-900/80">
@@ -1846,9 +2100,19 @@ function MiniInsightTable({
           <tbody className="divide-y divide-white/10 text-fog-300">
             {rows.length > 0 ? (
               rows.map((row) => (
-                <tr key={row.id}>
+                <tr
+                  key={row.id}
+                  className={onRowClick ? "cursor-pointer transition hover:bg-white/[0.04]" : ""}
+                  onClick={() => onRowClick?.(row)}
+                >
                   <td className="px-4 py-3">
-                    <p className="font-bold text-white">{row.name}</p>
+                    <button
+                      type="button"
+                      className="text-left font-bold text-white transition hover:text-acid"
+                      onClick={() => onRowClick?.(row)}
+                    >
+                      {row.name}
+                    </button>
                     <p className="mt-1 text-fog-500">{row.deliveryStatus || row.id}</p>
                   </td>
                   <td className="px-4 py-3">{formatCurrency(row.spend, currency)}</td>
@@ -2564,6 +2828,8 @@ export function OptimizationCenter({
   reports,
   onRefresh,
   onReport,
+  onReportUpdate,
+  onReportDelete,
   runAiTask
 }: {
   connection: MetaConnectionState;
@@ -2571,11 +2837,14 @@ export function OptimizationCenter({
   reports: MetaActionReport[];
   onRefresh: () => void;
   onReport: (report: MetaActionReport) => void;
+  onReportUpdate: (reportId: string, patch: Partial<Pick<MetaActionReport, "title" | "message" | "details">>) => void;
+  onReportDelete: (reportId: string) => void;
   runAiTask: <T>(label: string, task: () => Promise<T>) => Promise<T>;
 }) {
   const actions = buildOptimizationActions(data.campaigns);
   const [pendingAction, setPendingAction] = useState<MetaOptimizationAction | null>(null);
   const [aiNotes, setAiNotes] = useState("");
+  const [editingReport, setEditingReport] = useState<{ id: string; message: string } | null>(null);
   const directActions = actions.filter((action) => action.executable).length;
   const noteActions = actions.length - directActions;
 
@@ -2752,6 +3021,46 @@ export function OptimizationCenter({
                     ))}
                   </div>
                 ) : null}
+                {editingReport?.id === report.id ? (
+                  <div className="mt-4 grid gap-3">
+                    <textarea
+                      value={editingReport.message}
+                      onChange={(event) => setEditingReport({ id: report.id, message: event.target.value })}
+                      className="min-h-24 rounded-lg border border-white/10 bg-carbon-950 px-3 py-2 text-sm text-white"
+                    />
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <button
+                        className="button-primary"
+                        type="button"
+                        onClick={() => {
+                          onReportUpdate(report.id, { message: editingReport.message });
+                          setEditingReport(null);
+                        }}
+                      >
+                        Güncelle
+                        <CheckCircle2 className="size-4" />
+                      </button>
+                      <button className="button-secondary" type="button" onClick={() => setEditingReport(null)}>
+                        Vazgeç
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+                    <button
+                      className="button-secondary px-3 py-2 text-xs"
+                      type="button"
+                      onClick={() => setEditingReport({ id: report.id, message: report.message })}
+                    >
+                      Güncelle
+                      <FileText className="size-4" />
+                    </button>
+                    <button className="button-ghost px-3 py-2 text-xs text-ember" type="button" onClick={() => onReportDelete(report.id)}>
+                      Kaldır
+                      <X className="size-4" />
+                    </button>
+                  </div>
+                )}
               </div>
             ))
           ) : (

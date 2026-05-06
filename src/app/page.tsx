@@ -16,6 +16,7 @@ import { SectionHeader } from "@/components/SectionHeader";
 import { ServiceGrid } from "@/components/ServiceGrid";
 import { blogPosts, processSteps, sectors, services, trustStats, whyItems } from "@/lib/content";
 import { iconMap } from "@/components/IconMap";
+import { subscriptionPlans } from "@/lib/subscription";
 
 export default function HomePage() {
   return (
@@ -68,6 +69,44 @@ export default function HomePage() {
               <p className="mt-2 text-sm leading-6 text-fog-400">{stat.label}</p>
             </Reveal>
           ))}
+        </div>
+      </section>
+
+      <section className="section-shell section-y">
+        <div className="grid gap-10 lg:grid-cols-[0.85fr_1.15fr] lg:items-start">
+          <SectionHeader
+            eyebrow="Meta Reklam AI Panel"
+            title="Müşterinin kendi reklam hesabını anlayacağı sade AI panel."
+            description="Meta reklam hesabını bağlayın; kampanyaları satış, trafik, mesaj ve lead hedeflerine göre ayrı okuyun. AI analiz, kreatif fikir, optimizasyon raporu ve 30 günlük abonelik takibi tek yerde çalışır."
+          />
+          <div className="surface rounded-lg p-5">
+            <div className="grid gap-4 sm:grid-cols-3">
+              {subscriptionPlans.map((plan) => (
+                <div key={plan.id} className="rounded-lg border border-white/10 bg-carbon-950 p-4">
+                  <p className="text-xs font-bold uppercase tracking-[0.14em] text-acid">{plan.badge}</p>
+                  <h3 className="mt-3 text-xl font-black text-white">${plan.priceUsd}</h3>
+                  <p className="mt-2 text-sm leading-6 text-fog-400">
+                    {plan.adAccountLimit} reklam hesabı, 30 gün panel erişimi.
+                  </p>
+                </div>
+              ))}
+            </div>
+            <div className="mt-5 grid gap-3 rounded-lg border border-acid/25 bg-acid/10 p-4 text-sm leading-7 text-fog-200">
+              <p>
+                Panel; hedef belirleme, canlı performans tablosu, ad set ve reklam detay popup'ları, AI müdahale analizi
+                ve optimizasyon geçmişiyle müşterinin günlük reklam kararlarını kolaylaştırır.
+              </p>
+            </div>
+            <div className="mt-5 flex flex-col gap-3 sm:flex-row">
+              <Link href="/abonelik" className="button-primary">
+                Abonelik Paketlerini Gör
+                <ArrowRight className="size-4" />
+              </Link>
+              <Link href="/panel" className="button-secondary">
+                Paneli Aç
+              </Link>
+            </div>
+          </div>
         </div>
       </section>
 

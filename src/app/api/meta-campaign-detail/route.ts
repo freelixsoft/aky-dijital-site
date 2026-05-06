@@ -42,6 +42,13 @@ type MetaEntityMetaRow = {
   name?: string;
   status?: string;
   effective_status?: string;
+  creative?: {
+    id?: string;
+    name?: string;
+    thumbnail_url?: string;
+    image_url?: string;
+    video_id?: string;
+  };
 };
 
 type MetaListResponse<T> = {
@@ -198,7 +205,12 @@ function mapAd(row: MetaInsightRow, campaign: MetaCampaignInsight, meta?: MetaEn
     primaryResultLabel: primaryResult.label,
     primaryResultAction: primaryResult.actionType,
     roas: extractRoasValue(row.purchase_roas),
-    deliveryStatus: meta?.effective_status || meta?.status
+    deliveryStatus: meta?.effective_status || meta?.status,
+    previewUrl: meta?.creative?.thumbnail_url || meta?.creative?.image_url,
+    thumbnailUrl: meta?.creative?.thumbnail_url,
+    imageUrl: meta?.creative?.image_url,
+    videoId: meta?.creative?.video_id,
+    creativeName: meta?.creative?.name
   };
 }
 
@@ -249,7 +261,7 @@ export async function POST(request: Request) {
       graphList<MetaEntityMetaRow>(
         `${campaign.campaignId}/ads`,
         {
-          fields: "id,name,status,effective_status",
+          fields: "id,name,status,effective_status,creative{id,name,thumbnail_url,image_url,video_id}",
           limit: "500"
         },
         accessToken

@@ -13,6 +13,7 @@ export const navItems = [
   { label: "Hakkımızda", href: "/hakkimizda" },
   { label: "Sektörler", href: "/sektorler" },
   { label: "Blog", href: "/blog" },
+  { label: "Abonelik", href: "/abonelik" },
   { label: "İletişim", href: "/iletisim" }
 ];
 

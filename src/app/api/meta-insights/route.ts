@@ -110,8 +110,8 @@ function getStatusLabel(status?: number) {
 
 function getCampaignTypeLabel(type: MetaCampaignType) {
   const labels: Record<MetaCampaignType, string> = {
-    sales: "Satış / dönüşüm",
-    traffic: "Trafik / profil ziyareti",
+    sales: "Satış",
+    traffic: "Trafik",
     messages: "Mesaj",
     leads: "Lead",
     awareness: "Bilinirlik",
@@ -155,16 +155,26 @@ function inferTypeFromActions(actions?: MetaInsightsRow["actions"]) {
   const actionTypes = actions.map((item) => item.action_type || "").join("|").toLowerCase();
 
   if (actionTypes.includes("messaging") || actionTypes.includes("message")) return "messages";
-  if (actionTypes.includes("profile_visit") || actionTypes.includes("landing_page_view") || actionTypes.includes("link_click")) {
-    return "traffic";
-  }
-  if (actionTypes.includes("lead")) return "leads";
   if (actionTypes.includes("purchase")) return "sales";
+  if (actionTypes.includes("lead")) return "leads";
+  if (actionTypes.includes("profile_visit")) return "traffic";
   if (actionTypes.includes("post_engagement") || actionTypes.includes("page_engagement") || actionTypes.includes("video_view")) {
     return "engagement";
   }
 
   return undefined;
+}
+
+function resolveCampaignType(objectiveType: MetaCampaignType, actionType?: MetaCampaignType): MetaCampaignType {
+  if (objectiveType === "sales" || objectiveType === "traffic" || objectiveType === "leads" || objectiveType === "awareness" || objectiveType === "app") {
+    return objectiveType;
+  }
+
+  if (objectiveType === "engagement" && actionType === "messages") {
+    return "messages";
+  }
+
+  return actionType || objectiveType;
 }
 
 function extractPrimaryResult(
@@ -175,7 +185,7 @@ function extractPrimaryResult(
 ): PrimaryResult {
   const objectiveType = inferCampaignTypeFromObjective(objective);
   const actionType = inferTypeFromActions(actions);
-  const campaignType = actionType || objectiveType;
+  const campaignType = resolveCampaignType(objectiveType, actionType);
   const actionGroups: Record<MetaCampaignType, { label: string; actions: string[] }> = {
     sales: {
       label: "Satın alma",

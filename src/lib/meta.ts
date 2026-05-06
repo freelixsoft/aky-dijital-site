@@ -45,6 +45,11 @@ export type MetaEntityInsight = {
   primaryResultAction?: string;
   roas: number;
   deliveryStatus?: string;
+  previewUrl?: string;
+  thumbnailUrl?: string;
+  imageUrl?: string;
+  videoId?: string;
+  creativeName?: string;
 };
 
 export type MetaSummary = {
