@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowRight, LockKeyhole } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
+import { verifyPassword } from "@/lib/local-password";
 import {
   getSubscriptionDaysLeft,
   memberSessionStorageKey,
@@ -19,6 +20,7 @@ export function LoginForm() {
   const [membership, setMembership] = useState<CustomerMembership | null>(null);
   const [subscription, setSubscription] = useState<SubscriptionState | null>(null);
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
 
@@ -37,7 +39,7 @@ export function LoginForm() {
     }
   }, []);
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
 
@@ -53,6 +55,18 @@ export function LoginForm() {
 
     if (email.trim().toLowerCase() !== membership.email.toLowerCase()) {
       setError("Bu e-posta ile aktif üyelik bulunamadı.");
+      return;
+    }
+
+    if (!membership.passwordSalt || !membership.passwordHash) {
+      setError("Bu üyelik eski akışla oluşturulmuş. Lütfen abonelik sayfasından üyeliği şifreyle yeniden aktif edin.");
+      return;
+    }
+
+    const isPasswordValid = await verifyPassword(password, membership.passwordSalt, membership.passwordHash);
+
+    if (!isPasswordValid) {
+      setError("Şifre hatalı. Lütfen kayıt sırasında belirlediğiniz panel şifresini girin.");
       return;
     }
 
@@ -93,6 +107,18 @@ export function LoginForm() {
         />
       </label>
 
+      <label className="grid gap-2 text-sm font-semibold text-fog-100">
+        Panel Şifresi
+        <input
+          className="min-w-0 rounded-lg border border-white/10 bg-carbon-950 px-4 py-3 text-white placeholder:text-fog-500"
+          type="password"
+          placeholder="Kayıt sırasında belirlediğiniz şifre"
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+          required
+        />
+      </label>
+
       {error ? (
         <div className="rounded-lg border border-ember/25 bg-ember/10 px-4 py-3 text-sm leading-7 text-fog-200">
           {error}
@@ -107,8 +133,8 @@ export function LoginForm() {
         Üyelik Oluştur / Plan Yenile
       </Link>
       <p className="text-xs leading-6 text-fog-500">
-        Bu prototipte giriş, kayıtlı üyelik e-postası ve 30 günlük aktif plan kontrolüyle çalışır. Canlı sistemde SMS/e-posta OTP
-        veya güvenli backend auth bağlanmalıdır.
+        Bu prototipte giriş, kayıtlı üyelik e-postası, şifre hash doğrulaması ve 30 günlük aktif plan kontrolüyle çalışır.
+        Canlı sistemde SMS/e-posta OTP veya güvenli backend auth bağlanmalıdır.
       </p>
     </form>
   );

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { CheckCircle2, CreditCard, ShieldCheck, Sparkles, UserRound } from "lucide-react";
 import { FormEvent, useState } from "react";
+import { createPasswordVerifier } from "@/lib/local-password";
 import {
   memberSessionStorageKey,
   membershipStorageKey,
@@ -29,17 +30,34 @@ function buildSubscription(planId: SubscriptionPlanId): SubscriptionState {
 export function SubscriptionClient() {
   const [selectedPlanId, setSelectedPlanId] = useState<SubscriptionPlanId | null>(null);
   const [successMessage, setSuccessMessage] = useState("");
+  const [formError, setFormError] = useState("");
   const selectedPlan = subscriptionPlans.find((plan) => plan.id === selectedPlanId);
 
-  function handleMembershipSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleMembershipSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedPlan) return;
+    setFormError("");
 
     const form = new FormData(event.currentTarget);
+    const password = String(form.get("password") || "");
+    const passwordConfirm = String(form.get("passwordConfirm") || "");
+
+    if (password.length < 8) {
+      setFormError("Şifre en az 8 karakter olmalı.");
+      return;
+    }
+
+    if (password !== passwordConfirm) {
+      setFormError("Şifreler eşleşmiyor.");
+      return;
+    }
+
+    const passwordVerifier = await createPasswordVerifier(password);
     const membership: CustomerMembership = {
       fullName: String(form.get("fullName") || ""),
       email: String(form.get("email") || "").trim().toLowerCase(),
       phone: String(form.get("phone") || ""),
+      ...passwordVerifier,
       companyName: String(form.get("companyName") || ""),
       website: String(form.get("website") || ""),
       sector: String(form.get("sector") || ""),
@@ -113,7 +131,7 @@ export function SubscriptionClient() {
               <h3 className="text-lg font-black text-white">Üyelik + 30 günlük abonelik döngüsü</h3>
               <p className="mt-2 max-w-3xl text-sm leading-7 text-fog-400">
                 Paket seçildikten sonra müşteri bilgileri alınır, üyelik aktif edilir ve kullanıcı giriş ekranından panele
-                girer. Şifre veya ödeme bilgisi bu demo ekranda saklanmaz; canlı sistemde güvenli backend auth bağlanmalıdır.
+                girer. Şifre düz metin saklanmaz; bu prototipte salt + hash ile doğrulanır. Canlı sistemde güvenli backend auth bağlanmalıdır.
               </p>
             </div>
           </div>
@@ -153,6 +171,14 @@ export function SubscriptionClient() {
               <input name="phone" required className="min-h-12 rounded-lg border border-white/10 bg-carbon-950 px-4 py-3 text-white" />
             </label>
             <label className="grid gap-2 text-sm font-semibold text-fog-100">
+              Panel Şifresi
+              <input name="password" type="password" minLength={8} required className="min-h-12 rounded-lg border border-white/10 bg-carbon-950 px-4 py-3 text-white" />
+            </label>
+            <label className="grid gap-2 text-sm font-semibold text-fog-100">
+              Şifre Tekrarı
+              <input name="passwordConfirm" type="password" minLength={8} required className="min-h-12 rounded-lg border border-white/10 bg-carbon-950 px-4 py-3 text-white" />
+            </label>
+            <label className="grid gap-2 text-sm font-semibold text-fog-100">
               Firma / Marka Adı
               <input name="companyName" required className="min-h-12 rounded-lg border border-white/10 bg-carbon-950 px-4 py-3 text-white" />
             </label>
@@ -187,6 +213,11 @@ export function SubscriptionClient() {
               </button>
             </div>
           </form>
+          {formError ? (
+            <div className="mt-5 rounded-lg border border-ember/25 bg-ember/10 p-4 text-sm font-semibold text-fog-100">
+              {formError}
+            </div>
+          ) : null}
           {successMessage ? (
             <div className="mt-5 rounded-lg border border-acid/25 bg-acid/10 p-4 text-sm font-semibold text-fog-100">
               {successMessage}

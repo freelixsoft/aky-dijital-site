@@ -20,6 +20,8 @@ export type CustomerMembership = {
   fullName: string;
   email: string;
   phone: string;
+  passwordSalt: string;
+  passwordHash: string;
   companyName: string;
   website: string;
   sector: string;
