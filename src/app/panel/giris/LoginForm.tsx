@@ -75,6 +75,7 @@ export function LoginForm() {
       email: membership.email,
       loggedInAt: new Date().toISOString()
     };
+    window.localStorage.setItem(memberSessionStorageKey, JSON.stringify(session));
     window.sessionStorage.setItem(memberSessionStorageKey, JSON.stringify(session));
 
     window.setTimeout(() => {

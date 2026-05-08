@@ -15,7 +15,10 @@ import {
   Gauge,
   History,
   Image as ImageIcon,
+  KeyRound,
+  LifeBuoy,
   LockKeyhole,
+  LogOut,
   LineChart,
   MessageSquareText,
   MousePointerClick,
@@ -28,11 +31,13 @@ import {
   SlidersHorizontal,
   Sparkles,
   Unplug,
+  UserCog,
   WandSparkles,
   X,
   type LucideIcon
 } from "lucide-react";
 import { Fragment, FormEvent, useEffect, useMemo, useState } from "react";
+import { createPasswordVerifier, verifyPassword } from "@/lib/local-password";
 import { quickPrompts } from "@/lib/panel";
 import type {
   MetaAccountSnapshot,
@@ -93,6 +98,7 @@ const datePresetLabel: Record<string, string> = {
 
 const reportStorageKey = "aky-panel-optimization-reports";
 const goalsStorageKey = "aky-panel-customer-goals";
+const supportRequestsStorageKey = "aky-panel-support-requests";
 
 type DateFilter = {
   datePreset: string;
@@ -112,11 +118,56 @@ type CustomerGoals = {
   maxCostPerResult: number;
 };
 
+type SupportRequest = {
+  id: string;
+  customerEmail: string;
+  category: string;
+  priority: "normal" | "high" | "urgent";
+  subject: string;
+  message: string;
+  status: "new" | "in_review" | "answered";
+  createdAt: string;
+};
+
 const defaultCustomerGoals: CustomerGoals = {
   monthlyBudget: 50000,
   targetResults: 100,
   maxCostPerResult: 500
 };
+
+const supportCategoryOptions = [
+  "Performans analizi",
+  "Optimizasyon istegi",
+  "Meta baglanti sorunu",
+  "Kreatif talep",
+  "Fatura ve abonelik",
+  "Teknik destek"
+];
+
+const supportPriorityLabel = {
+  normal: "Normal",
+  high: "Oncelikli",
+  urgent: "Acil"
+} as const;
+
+const supportStatusLabel = {
+  new: "Yeni",
+  in_review: "Incelemede",
+  answered: "Yanıtlandı"
+} as const;
+
+function readSupportRequests() {
+  try {
+    const stored = window.localStorage.getItem(supportRequestsStorageKey);
+    return stored ? (JSON.parse(stored) as SupportRequest[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistSupportRequests(requests: SupportRequest[]) {
+  window.localStorage.setItem(supportRequestsStorageKey, JSON.stringify(requests.slice(0, 50)));
+}
 
 function readGoalNumber(value: unknown, fallback: number) {
   const numeric = Number(value);
@@ -413,7 +464,8 @@ type PanelModuleId =
   | "analiz"
   | "optimizasyon"
   | "kampanyalar"
-  | "chat";
+  | "chat"
+  | "hesap";
 
 type PanelModule = {
   id: PanelModuleId;
@@ -437,6 +489,13 @@ const panelWorkspaceModules: PanelModule[] = [
     title: "Meta Bağlantısı",
     description: "Access token ve reklam hesabı ID alanlarını güvenli şekilde yönetin.",
     accent: "acid"
+  },
+  {
+    id: "hesap",
+    icon: UserCog,
+    title: "Hesabım & Talepler",
+    description: "Şifre değiştirin, üyelik bilgilerini görün ve destek talebi oluşturun.",
+    accent: "pulse"
   },
   {
     id: "kampanya",
@@ -527,7 +586,8 @@ export function PanelWorkspace() {
     try {
       const stored = window.localStorage.getItem(subscriptionStorageKey);
       const storedMembership = window.localStorage.getItem(membershipStorageKey);
-      const storedSession = window.sessionStorage.getItem(memberSessionStorageKey);
+      const storedSession =
+        window.localStorage.getItem(memberSessionStorageKey) || window.sessionStorage.getItem(memberSessionStorageKey);
       setSubscription(stored ? (JSON.parse(stored) as SubscriptionState) : null);
       setMembership(storedMembership ? (JSON.parse(storedMembership) as CustomerMembership) : null);
       setMemberSession(storedSession ? (JSON.parse(storedSession) as CustomerSession) : null);
@@ -588,6 +648,18 @@ export function PanelWorkspace() {
   function saveCustomerGoals(nextGoals: CustomerGoals) {
     setCustomerGoals(nextGoals);
     window.localStorage.setItem(goalsStorageKey, JSON.stringify(nextGoals));
+  }
+
+  function updateMembership(nextMembership: CustomerMembership) {
+    setMembership(nextMembership);
+    window.localStorage.setItem(membershipStorageKey, JSON.stringify(nextMembership));
+  }
+
+  function handleLogout() {
+    window.localStorage.removeItem(memberSessionStorageKey);
+    window.sessionStorage.removeItem(memberSessionStorageKey);
+    setMemberSession(null);
+    setActiveModule(null);
   }
 
   function runAiTask<T>(label: string, task: () => Promise<T>) {
@@ -651,7 +723,7 @@ export function PanelWorkspace() {
   }
 
   function handleModuleClick(module: PanelModule) {
-    const isLocked = !isConnected && module.id !== "meta";
+    const isLocked = !isConnected && module.id !== "meta" && module.id !== "hesap";
 
     if (isLocked) {
       setGateMessage("Önce Meta bağlantısını kurunuz. Bağlantı olmadan kampanya verisi, AI analiz ve optimizasyon modülleri çalışmaz.");
@@ -670,7 +742,7 @@ export function PanelWorkspace() {
   const activePlan = getSubscriptionPlan(subscription?.planId);
   const countdown = subscription ? getSubscriptionCountdown(subscription.expiresAt, subscriptionNow) : null;
 
-  if (!activePlan || !countdown || countdown.totalMinutes <= 0) {
+  if (!subscription || !activePlan || !countdown || countdown.totalMinutes <= 0) {
     return <SubscriptionRequiredNotice subscription={subscription} />;
   }
 
@@ -685,6 +757,8 @@ export function PanelWorkspace() {
         countdown={countdown}
         adAccountLimit={activePlan.adAccountLimit}
         companyName={membership.companyName}
+        onAccountClick={() => setActiveModule("hesap")}
+        onLogout={handleLogout}
       />
       <div className="mx-auto max-w-3xl text-center">
         <p className="eyebrow">Panel modülleri</p>
@@ -714,7 +788,7 @@ export function PanelWorkspace() {
         {panelWorkspaceModules.map((module, index) => {
           const Icon = module.icon;
           const isActive = module.id === activeModule;
-          const isLocked = !isConnected && module.id !== "meta";
+          const isLocked = !isConnected && module.id !== "meta" && module.id !== "hesap";
 
           return (
             <motion.button
@@ -796,6 +870,10 @@ export function PanelWorkspace() {
               activeModule={activeModuleMeta.id}
               connection={connection}
               data={metaData}
+              membership={membership}
+              subscription={subscription}
+              activePlanName={activePlan.name}
+              adAccountLimit={activePlan.adAccountLimit}
               dateFilter={dateFilter}
               customerGoals={customerGoals}
               reports={reports}
@@ -808,6 +886,8 @@ export function PanelWorkspace() {
               onReport={saveReport}
               onReportUpdate={updateReport}
               onReportDelete={deleteReport}
+              onMembershipUpdate={updateMembership}
+              onLogout={handleLogout}
               onRefresh={() => void refreshMetaData()}
               runAiTask={runAiTask}
             />
@@ -836,6 +916,10 @@ type ActivePanelModuleProps = {
   activeModule: PanelModuleId;
   connection: MetaConnectionState | null;
   data: MetaInsightsData | null;
+  membership: CustomerMembership;
+  subscription: SubscriptionState;
+  activePlanName: string;
+  adAccountLimit: number;
   dateFilter: DateFilter;
   customerGoals: CustomerGoals;
   reports: MetaActionReport[];
@@ -848,6 +932,8 @@ type ActivePanelModuleProps = {
   onReport: (report: MetaActionReport) => void;
   onReportUpdate: (reportId: string, patch: Partial<Pick<MetaActionReport, "title" | "message" | "details">>) => void;
   onReportDelete: (reportId: string) => void;
+  onMembershipUpdate: (membership: CustomerMembership) => void;
+  onLogout: () => void;
   onRefresh: () => void;
   runAiTask: <T>(label: string, task: () => Promise<T>) => Promise<T>;
 };
@@ -856,6 +942,10 @@ function ActivePanelModule({
   activeModule,
   connection,
   data,
+  membership,
+  subscription,
+  activePlanName,
+  adAccountLimit,
   dateFilter,
   customerGoals,
   reports,
@@ -868,6 +958,8 @@ function ActivePanelModule({
   onReport,
   onReportUpdate,
   onReportDelete,
+  onMembershipUpdate,
+  onLogout,
   onRefresh,
   runAiTask
 }: ActivePanelModuleProps) {
@@ -881,6 +973,19 @@ function ActivePanelModule({
         onConnected={onConnected}
         onDisconnected={onDisconnected}
         onRefresh={onRefresh}
+      />
+    );
+  }
+
+  if (activeModule === "hesap") {
+    return (
+      <CustomerAccountCenter
+        membership={membership}
+        subscription={subscription}
+        planName={activePlanName}
+        adAccountLimit={adAccountLimit}
+        onMembershipUpdate={onMembershipUpdate}
+        onLogout={onLogout}
       />
     );
   }
@@ -944,6 +1049,293 @@ function ActivePanelModule({
   }
 }
 
+function CustomerAccountCenter({
+  membership,
+  subscription,
+  planName,
+  adAccountLimit,
+  onMembershipUpdate,
+  onLogout
+}: {
+  membership: CustomerMembership;
+  subscription: SubscriptionState;
+  planName: string;
+  adAccountLimit: number;
+  onMembershipUpdate: (membership: CustomerMembership) => void;
+  onLogout: () => void;
+}) {
+  const [requests, setRequests] = useState<SupportRequest[]>([]);
+  const [passwordError, setPasswordError] = useState("");
+  const [passwordNotice, setPasswordNotice] = useState("");
+  const [requestError, setRequestError] = useState("");
+  const [requestNotice, setRequestNotice] = useState("");
+  const [isPasswordSaving, setIsPasswordSaving] = useState(false);
+  const countdown = getSubscriptionCountdown(subscription.expiresAt);
+
+  useEffect(() => {
+    setRequests(readSupportRequests().filter((request) => request.customerEmail === membership.email));
+  }, [membership.email]);
+
+  async function handlePasswordSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setPasswordError("");
+    setPasswordNotice("");
+
+    const form = new FormData(event.currentTarget);
+    const currentPassword = String(form.get("currentPassword") || "");
+    const nextPassword = String(form.get("nextPassword") || "");
+    const nextPasswordConfirm = String(form.get("nextPasswordConfirm") || "");
+
+    if (!membership.passwordSalt || !membership.passwordHash) {
+      setPasswordError("Bu üyelik eski kayıt akışıyla oluşturulmuş. Önce abonelik sayfasından üyeliği şifreyle yenileyin.");
+      return;
+    }
+
+    if (nextPassword.length < 8) {
+      setPasswordError("Yeni şifre en az 8 karakter olmalı.");
+      return;
+    }
+
+    if (nextPassword !== nextPasswordConfirm) {
+      setPasswordError("Yeni şifreler eşleşmiyor.");
+      return;
+    }
+
+    setIsPasswordSaving(true);
+    try {
+      const currentPasswordValid = await verifyPassword(currentPassword, membership.passwordSalt, membership.passwordHash);
+
+      if (!currentPasswordValid) {
+        setPasswordError("Mevcut şifre hatalı. Lütfen tekrar deneyin.");
+        return;
+      }
+
+      const verifier = await createPasswordVerifier(nextPassword);
+      onMembershipUpdate({ ...membership, ...verifier });
+      event.currentTarget.reset();
+      setPasswordNotice("Şifreniz güncellendi. Bir sonraki girişte yeni şifrenizi kullanabilirsiniz.");
+    } catch {
+      setPasswordError("Şifre güncellenirken bir sorun oluştu. Lütfen tekrar deneyin.");
+    } finally {
+      setIsPasswordSaving(false);
+    }
+  }
+
+  function handleRequestSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setRequestError("");
+    setRequestNotice("");
+
+    const form = new FormData(event.currentTarget);
+    const subject = String(form.get("subject") || "").trim();
+    const message = String(form.get("message") || "").trim();
+    const priority = String(form.get("priority") || "normal") as SupportRequest["priority"];
+
+    if (subject.length < 3 || message.length < 10) {
+      setRequestError("Talep başlığı ve açıklaması biraz daha detaylı olmalı.");
+      return;
+    }
+
+    const request: SupportRequest = {
+      id: `talep-${Date.now()}`,
+      customerEmail: membership.email,
+      category: String(form.get("category") || supportCategoryOptions[0]),
+      priority,
+      subject,
+      message,
+      status: "new",
+      createdAt: new Date().toISOString()
+    };
+
+    const nextAllRequests = [request, ...readSupportRequests()].slice(0, 50);
+    persistSupportRequests(nextAllRequests);
+    setRequests(nextAllRequests.filter((item) => item.customerEmail === membership.email));
+    event.currentTarget.reset();
+    setRequestNotice("Talebiniz alındı. Aky Dijital ekibi bu kayıt üzerinden dönüş yapabilir.");
+  }
+
+  return (
+    <div className="grid gap-5">
+      <div className="rounded-lg border border-pulse/25 bg-pulse/10 p-5">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <p className="text-xs font-black uppercase tracking-[0.16em] text-pulse">Müşteri hesabı</p>
+            <h3 className="mt-2 text-2xl font-black text-white">{membership.companyName}</h3>
+            <p className="mt-2 max-w-3xl text-sm leading-7 text-fog-300">
+              Panel oturumunuz artık tarayıcıda kalıcı tutulur. Ana sayfaya dönseniz bile çıkış yapmadığınız sürece panele
+              yeniden giriş istemeden dönebilirsiniz.
+            </p>
+          </div>
+          <button type="button" className="button-ghost shrink-0 justify-center text-fog-300" onClick={onLogout}>
+            Güvenli Çıkış
+            <LogOut className="size-4" />
+          </button>
+        </div>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        {[
+          { label: "Yetkili", value: membership.fullName || "Belirtilmedi" },
+          { label: "E-posta", value: membership.email },
+          { label: "Plan", value: `${planName} / ${adAccountLimit} reklam hesabı` },
+          { label: "Kalan süre", value: `${countdown.days}g ${countdown.hours}s ${countdown.minutes}dk` }
+        ].map((item) => (
+          <div key={item.label} className="rounded-lg border border-white/10 bg-carbon-950 p-4">
+            <p className="text-xs font-bold uppercase tracking-[0.14em] text-fog-500">{item.label}</p>
+            <p className="mt-2 break-words text-sm font-black text-white">{item.value}</p>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid gap-5 lg:grid-cols-[0.9fr_1.1fr]">
+        <form className="rounded-lg border border-white/10 bg-carbon-950 p-5" onSubmit={handlePasswordSubmit}>
+          <div className="flex items-start gap-3">
+            <span className="flex size-11 shrink-0 items-center justify-center rounded-lg border border-acid/25 bg-acid/10 text-acid">
+              <KeyRound className="size-5" />
+            </span>
+            <div>
+              <h4 className="text-xl font-black text-white">Şifre değiştir</h4>
+              <p className="mt-1 text-sm leading-7 text-fog-400">
+                Şifre güncellemek için mevcut şifreyi girin. Yeni şifre en az 8 karakter olmalı.
+              </p>
+            </div>
+          </div>
+          <div className="mt-5 grid gap-3">
+            <input
+              className="min-w-0 rounded-lg border border-white/10 bg-carbon-900 px-4 py-3 text-sm text-white placeholder:text-fog-500"
+              name="currentPassword"
+              type="password"
+              placeholder="Mevcut şifre"
+              required
+            />
+            <input
+              className="min-w-0 rounded-lg border border-white/10 bg-carbon-900 px-4 py-3 text-sm text-white placeholder:text-fog-500"
+              name="nextPassword"
+              type="password"
+              placeholder="Yeni şifre"
+              minLength={8}
+              required
+            />
+            <input
+              className="min-w-0 rounded-lg border border-white/10 bg-carbon-900 px-4 py-3 text-sm text-white placeholder:text-fog-500"
+              name="nextPasswordConfirm"
+              type="password"
+              placeholder="Yeni şifre tekrar"
+              minLength={8}
+              required
+            />
+          </div>
+          {passwordError ? <p className="mt-3 rounded-lg border border-ember/25 bg-ember/10 px-3 py-2 text-sm text-fog-200">{passwordError}</p> : null}
+          {passwordNotice ? <p className="mt-3 rounded-lg border border-acid/25 bg-acid/10 px-3 py-2 text-sm text-fog-100">{passwordNotice}</p> : null}
+          <button type="submit" className="button-primary mt-4 w-full justify-center" disabled={isPasswordSaving}>
+            {isPasswordSaving ? "Güncelleniyor..." : "Şifreyi Güncelle"}
+            <ShieldCheck className="size-4" />
+          </button>
+        </form>
+
+        <form className="rounded-lg border border-white/10 bg-carbon-950 p-5" onSubmit={handleRequestSubmit}>
+          <div className="flex items-start gap-3">
+            <span className="flex size-11 shrink-0 items-center justify-center rounded-lg border border-electric/25 bg-electric/10 text-electric">
+              <LifeBuoy className="size-5" />
+            </span>
+            <div>
+              <h4 className="text-xl font-black text-white">Talep oluştur</h4>
+              <p className="mt-1 text-sm leading-7 text-fog-400">
+                Reklam hesabı, optimizasyon, kreatif veya teknik destek için ekibe anlaşılır bir talep bırakın.
+              </p>
+            </div>
+          </div>
+          <div className="mt-5 grid gap-3 sm:grid-cols-2">
+            <select
+              className="min-w-0 rounded-lg border border-white/10 bg-carbon-900 px-4 py-3 text-sm text-white"
+              name="category"
+              required
+            >
+              {supportCategoryOptions.map((category) => (
+                <option key={category}>{category}</option>
+              ))}
+            </select>
+            <select
+              className="min-w-0 rounded-lg border border-white/10 bg-carbon-900 px-4 py-3 text-sm text-white"
+              name="priority"
+              defaultValue="normal"
+              required
+            >
+              <option value="normal">Normal</option>
+              <option value="high">Öncelikli</option>
+              <option value="urgent">Acil</option>
+            </select>
+          </div>
+          <input
+            className="mt-3 min-w-0 rounded-lg border border-white/10 bg-carbon-900 px-4 py-3 text-sm text-white placeholder:text-fog-500"
+            name="subject"
+            placeholder="Kısa başlık"
+            required
+          />
+          <textarea
+            className="mt-3 min-h-32 min-w-0 rounded-lg border border-white/10 bg-carbon-900 px-4 py-3 text-sm leading-7 text-white placeholder:text-fog-500"
+            name="message"
+            placeholder="Talebinizi, kampanya adını ve beklediğiniz aksiyonu yazın"
+            required
+          />
+          {requestError ? <p className="mt-3 rounded-lg border border-ember/25 bg-ember/10 px-3 py-2 text-sm text-fog-200">{requestError}</p> : null}
+          {requestNotice ? <p className="mt-3 rounded-lg border border-acid/25 bg-acid/10 px-3 py-2 text-sm text-fog-100">{requestNotice}</p> : null}
+          <button type="submit" className="button-primary mt-4 w-full justify-center">
+            Talebi Kaydet
+            <Send className="size-4" />
+          </button>
+        </form>
+      </div>
+
+      <div className="rounded-lg border border-white/10 bg-white/[0.035] p-5">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-xs font-black uppercase tracking-[0.16em] text-acid">Talep geçmişi</p>
+            <h4 className="mt-2 text-xl font-black text-white">Açılan müşteri talepleri</h4>
+          </div>
+          <Link href="/abonelik" className="button-ghost justify-center">
+            Planı Yönet
+            <RefreshCw className="size-4" />
+          </Link>
+        </div>
+
+        {requests.length ? (
+          <div className="mt-5 grid gap-3">
+            {requests.map((request) => (
+              <article key={request.id} className="rounded-lg border border-white/10 bg-carbon-950 p-4">
+                <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                  <div>
+                    <div className="flex flex-wrap gap-2 text-[0.7rem] font-bold uppercase tracking-[0.12em]">
+                      <span className="rounded-full border border-electric/25 bg-electric/10 px-3 py-1 text-electric">
+                        {request.category}
+                      </span>
+                      <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-fog-400">
+                        {supportPriorityLabel[request.priority]}
+                      </span>
+                      <span className="rounded-full border border-acid/25 bg-acid/10 px-3 py-1 text-acid">
+                        {supportStatusLabel[request.status]}
+                      </span>
+                    </div>
+                    <h5 className="mt-3 text-base font-black text-white">{request.subject}</h5>
+                    <p className="mt-2 text-sm leading-7 text-fog-300">{request.message}</p>
+                  </div>
+                  <p className="shrink-0 text-xs font-bold uppercase tracking-[0.12em] text-fog-500">
+                    {new Date(request.createdAt).toLocaleString("tr-TR")}
+                  </p>
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <div className="mt-5 rounded-lg border border-white/10 bg-carbon-950 p-4 text-sm leading-7 text-fog-400">
+            Henüz talep oluşturulmadı. Bir optimizasyon, kreatif ya da teknik destek ihtiyacı olduğunda buradan kayıt açabilirsiniz.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ConnectionRequiredNotice() {
   return (
     <div className="surface rounded-lg p-5 text-sm leading-7 text-fog-300">
@@ -999,12 +1391,16 @@ function SubscriptionStatusBanner({
   planName,
   adAccountLimit,
   countdown,
-  companyName
+  companyName,
+  onAccountClick,
+  onLogout
 }: {
   planName: string;
   adAccountLimit: number;
   countdown: { days: number; hours: number; minutes: number; totalMinutes: number };
   companyName: string;
+  onAccountClick: () => void;
+  onLogout: () => void;
 }) {
   return (
     <div className="mb-8 rounded-lg border border-acid/25 bg-acid/10 p-4">
@@ -1015,6 +1411,16 @@ function SubscriptionStatusBanner({
           <p className="mt-2 text-sm leading-7 text-fog-300">
             Bu plan {adAccountLimit} reklam hesabına kadar kullanım sağlar. Süre bittiğinde panel otomatik kilitlenir.
           </p>
+        </div>
+        <div className="grid gap-3 sm:min-w-72">
+          <button type="button" className="button-secondary w-full justify-center" onClick={onAccountClick}>
+            Hesabım & Talepler
+            <UserCog className="size-4" />
+          </button>
+          <button type="button" className="button-ghost w-full justify-center text-fog-300" onClick={onLogout}>
+            Çıkış Yap
+            <LogOut className="size-4" />
+          </button>
         </div>
         <div className="rounded-lg border border-white/10 bg-carbon-950 p-4 text-center">
           <p className="text-xs font-bold uppercase tracking-[0.14em] text-fog-500">Kalan süre</p>

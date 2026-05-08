@@ -72,6 +72,7 @@ export function SubscriptionClient() {
 
     window.localStorage.setItem(membershipStorageKey, JSON.stringify(membership));
     window.localStorage.setItem(subscriptionStorageKey, JSON.stringify(buildSubscription(selectedPlan.id)));
+    window.localStorage.removeItem(memberSessionStorageKey);
     window.sessionStorage.removeItem(memberSessionStorageKey);
     setSuccessMessage("Üyeliğiniz aktif edildi. Paneli kullanmak için giriş ekranına yönlendiriliyorsunuz.");
 
